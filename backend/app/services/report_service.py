@@ -256,7 +256,9 @@ def _generate_ai_analysis(
     )
 
     try:
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        from app.services.llm.client import get_openai_client
+
+        client = get_openai_client(api_key=api_key, base_url=base_url, timeout=60.0)
         completion = client.chat.completions.create(
             model=model_name,
             messages=[

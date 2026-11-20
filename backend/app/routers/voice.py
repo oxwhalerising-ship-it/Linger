@@ -33,13 +33,14 @@ from app.services.wakeword_service import wakeword_engine
 router = APIRouter(prefix="/api/voice", tags=["Voice"])
 
 
+from app.core.settings_store import get_setting
+
+
 def _get_tts_settings() -> dict:
-    """读取 settings 表中的 TTS 默认参数"""
-    with db_cursor() as cur:
-        cur.execute("SELECT value FROM settings WHERE key = 'tts';")
-        row = cur.fetchone()
-    if row:
-        return json.loads(row["value"])
+    """从内存配置缓存读取 TTS 默认参数"""
+    cfg = get_setting("tts")
+    if isinstance(cfg, dict):
+        return cfg
     return {
         "provider": "edge_tts",
         "voice": "zh-TW-HsiaoChenNeural",

@@ -11,11 +11,16 @@ from datetime import datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.logging import get_logger
 from app.database import init_db
 from app.routers import chat, habits, logs, memories, reports, schedule, settings, voice, voice_call
+from app.services.llm.client import close_all_llm_clients
 from app.services.scheduler_service import shutdown_scheduler, start_scheduler
+from app.services.stt_service import close_fish_asr_session
 from app.services.tts_provider import FishAudioTTSProvider
 from app.services.wakeword_service import wakeword_engine
+
+logger = get_logger("main")
 
 
 @asynccontextmanager
@@ -25,12 +30,16 @@ async def lifespan(_app: FastAPI):
     start_scheduler()
     loop = asyncio.get_running_loop()
     await asyncio.to_thread(wakeword_engine.start_if_enabled, loop)
+    logger.info("TaiwanBot 后端服务启动就绪")
     try:
         yield
     finally:
         await asyncio.to_thread(wakeword_engine.stop)
         shutdown_scheduler()
         await FishAudioTTSProvider.close_session()
+        await close_fish_asr_session()
+        await close_all_llm_clients()
+        logger.info("TaiwanBot 后端服务已优雅关闭")
 
 
 # 初始化 FastAPI 应用实例

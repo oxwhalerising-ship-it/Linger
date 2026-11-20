@@ -16,23 +16,30 @@
 
 import json
 import re
-import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, AsyncIterator
 
-from openai import AsyncOpenAI, OpenAI
-
+from app.core.logging import get_logger
+from app.core.settings_store import get_all_settings as _load_settings_dict
 from app.database import DATA_DIR, db_cursor
+from app.services.llm.client import (
+    _FAST_THINK_MODE_CACHE,
+    create_async_completion_fast as _create_async_completion_fast,
+    get_async_openai_client as _get_async_openai_client,
+    get_openai_client as _get_openai_client,
+)
+from app.services.llm.text_pipeline import (
+    IncrementalSentenceSplitter,
+    clean_spoken_text_for_tts,
+    infer_reply_emotion,
+)
 from app.services.markdown_exporter import export_daily_markdown
 from app.services.tts_provider import split_sentences_for_streaming
 
-# 复用 OpenAI HTTP 客户端（保持 Keep-Alive 长连接，避免每轮对话重复 TCP/TLS 握手）
-_OPENAI_CLIENT_CACHE: dict[tuple[str, str], OpenAI] = {}
-_ASYNC_OPENAI_CLIENT_CACHE: dict[tuple[str, str], AsyncOpenAI] = {}
-_OPENAI_CLIENT_LOCK = threading.Lock()
-# 缓存每个 (base_url, model) 实测可用的最优低思考档位："disabled" | "effort_minimal" | "effort_low" | "none"
-_FAST_THINK_MODE_CACHE: dict[tuple[str, str], str] = {}
+logger = get_logger("agent_brain")
+_MD_EXPORT_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="md-export")
 
 # 绝不喂回给大模型的系统兜底/占位文本，防止上下文污染诱发模型复读
 _HISTORY_NOISE_PHRASES = (
@@ -42,53 +49,18 @@ _HISTORY_NOISE_PHRASES = (
 )
 
 
-def _get_openai_client(api_key: str, base_url: str) -> OpenAI:
-    cache_key = (base_url, api_key)
-    with _OPENAI_CLIENT_LOCK:
-        client = _OPENAI_CLIENT_CACHE.get(cache_key)
-        if client is None:
-            if len(_OPENAI_CLIENT_CACHE) >= 8:
-                _OPENAI_CLIENT_CACHE.clear()
-            client = OpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
-            _OPENAI_CLIENT_CACHE[cache_key] = client
-        return client
-
-
-def _get_async_openai_client(api_key: str, base_url: str) -> AsyncOpenAI:
-    """复用异步 OpenAI 客户端（供实时语音通话流式首句抢跑与后台静默归档）"""
-    cache_key = (base_url, api_key)
-    with _OPENAI_CLIENT_LOCK:
-        client = _ASYNC_OPENAI_CLIENT_CACHE.get(cache_key)
-        if client is None:
-            if len(_ASYNC_OPENAI_CLIENT_CACHE) >= 8:
-                _ASYNC_OPENAI_CLIENT_CACHE.clear()
-            client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
-            _ASYNC_OPENAI_CLIENT_CACHE[cache_key] = client
-        return client
-
-
 def _schedule_markdown_export(date_str: str) -> str:
-    """后台异步刷新当日 Markdown 复盘日记，不阻塞对话接口返回"""
+    """单线程顺序队列异步刷新当日 Markdown 复盘日记，不阻塞对话接口且杜绝并发写冲突"""
     md_path = str(DATA_DIR / "notes" / "daily" / f"{date_str}.md")
 
     def _run() -> None:
         try:
             export_daily_markdown(date_str)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("后台 Markdown 导出失败 (%s): %s", date_str, exc)
 
-    threading.Thread(target=_run, daemon=True).start()
+    _MD_EXPORT_EXECUTOR.submit(_run)
     return md_path
-
-
-def _load_settings_dict() -> dict[str, Any]:
-    """从 SQLite 读取全部最新系统配置"""
-    result: dict[str, Any] = {}
-    with db_cursor() as cur:
-        cur.execute("SELECT key, value FROM settings;")
-        for row in cur.fetchall():
-            result[row["key"]] = json.loads(row["value"])
-    return result
 
 
 def _load_daily_context(date_str: str) -> dict[str, Any]:
@@ -577,115 +549,8 @@ def run_agent_chat(
 
 # ==================== Step 8：一对一低延迟实时语音通话双轨大脑 ====================
 
-_VOICE_MARKDOWN_NOISE_RE = re.compile(r"[*#`~_<>【】\[\]]+")
-_VOICE_STAGE_DIR_RE = re.compile(r"[（(][^）)]{1,16}[）)]")
-_STRONG_PUNCT_SET = set("。！？!?～…\n")
-_SOFT_PUNCT_SET = set("，、,；;：:")
-
-
-def clean_spoken_text_for_tts(text: str) -> str:
-    """清理不适合语音朗读的 Markdown 符号与舞台提示（保留自然台湾腔标点与语助词）"""
-    cleaned = _VOICE_STAGE_DIR_RE.sub("", text or "")
-    cleaned = _VOICE_MARKDOWN_NOISE_RE.sub("", cleaned)
-    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
-    return cleaned
-
-
-class IncrementalSentenceSplitter:
-    """
-    流式增量分句器（为实时语音通话首句抢跑设计）
-    -------------------------------------------
-    核心策略：
-    1. 首句极速切出：只要遇到句末强标点，或在逗号/顿号处已攒够 >= 7 个有效字符，立刻吐出送 TTS，
-       大幅压低「用户说完 -> 灵儿第一声开口」的端到端延迟（TTFA）。
-    2. 后续句子平滑切分：优先按强标点切分，或超过 18 字遇到逗号再切，兼顾低延迟与朗读自然连贯性。
-    """
-
-    def __init__(self) -> None:
-        self._buf = ""
-        self._emitted_count = 0
-
-    @staticmethod
-    def _meaningful_len(text: str) -> int:
-        return len(re.sub(r"[\s。，、！？!?.,…～~；;：:\-]", "", text))
-
-    @staticmethod
-    def _is_mostly_english(text: str) -> bool:
-        ascii_letters = sum(1 for ch in text if "a" <= ch.lower() <= "z")
-        cjk_chars = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
-        return ascii_letters > cjk_chars * 2 and ascii_letters >= 4
-
-    def feed(self, delta: str) -> list[str]:
-        if not delta:
-            return []
-        self._buf += delta
-        ready: list[str] = []
-
-        while True:
-            cut_idx = -1
-            is_first = self._emitted_count == 0
-            is_en = self._is_mostly_english(self._buf)
-            min_strong = (6 if is_en else 2) if is_first else (10 if is_en else 4)
-            min_soft = (18 if is_en else 7) if is_first else (36 if is_en else 18)
-
-            buf_len = len(self._buf)
-            for idx, ch in enumerate(self._buf):
-                candidate = self._buf[: idx + 1]
-                mlen = self._meaningful_len(candidate)
-                # 英文句点仅在后面接空白且前一位不是数字时作为句末切分，防止把 3.5 或 Mr. 拆断
-                is_en_period = (
-                    ch == "."
-                    and idx + 1 < buf_len
-                    and self._buf[idx + 1].isspace()
-                    and (idx == 0 or not self._buf[idx - 1].isdigit())
-                )
-                if (ch in _STRONG_PUNCT_SET or is_en_period) and mlen >= min_strong:
-                    cut_idx = idx + 1
-                    break
-                if ch in _SOFT_PUNCT_SET and mlen >= min_soft:
-                    cut_idx = idx + 1
-                    break
-
-            # 无标点长句兜底：英文按最后一个空格切分，绝不把单词拦腰截断
-            max_limit = (64 if is_en else 26) if is_first else (96 if is_en else 38)
-            if cut_idx == -1 and self._meaningful_len(self._buf) >= max_limit:
-                if is_en:
-                    last_space = self._buf.rfind(" ")
-                    if last_space >= 12:
-                        cut_idx = last_space + 1
-                else:
-                    cut_idx = len(self._buf)
-
-            if cut_idx == -1:
-                break
-
-            piece = clean_spoken_text_for_tts(self._buf[:cut_idx])
-            self._buf = self._buf[cut_idx:].lstrip()
-            if piece and self._meaningful_len(piece) >= 1:
-                ready.append(piece)
-                self._emitted_count += 1
-
-        return ready
-
-    def flush(self) -> list[str]:
-        tail = clean_spoken_text_for_tts(self._buf)
-        self._buf = ""
-        if tail and self._meaningful_len(tail) >= 1:
-            self._emitted_count += 1
-            return [tail]
-        return []
-
-
-def infer_reply_emotion(reply_text: str) -> str:
-    """根据灵儿口语回复即时推断桌宠/通话头像表情，零额外 LLM 延迟"""
-    text = reply_text or ""
-    if any(k in text for k in ("睡觉", "晚安", "早点睡", "熬夜", "休息一下", "困")):
-        return "sleepy"
-    if any(k in text for k in ("拍拍", "辛苦", "没关系", "抱抱", "加油", "已经很棒", "别太累")):
-        return "encouraging"
-    if any(k in text for k in ("想想", "让我想", "怎么说", "研究一下")):
-        return "thinking"
-    return "happy"
+# 流式增量分句器、TTS 文本清洗与情绪推断已统一抽离至 app.services.llm.text_pipeline
+# 低延迟思考档位探测与异步完成封装已统一抽离至 app.services.llm.client
 
 
 def _build_voice_call_system_prompt(
@@ -739,72 +604,6 @@ def _build_voice_call_system_prompt(
 ## 近期记得的事
 {memories_block}
 """
-
-
-def _candidate_fast_think_modes(base_url: str, model_name: str) -> list[str]:
-    """按厂商与模型系列返回低延迟思考档位尝试顺序（命中缓存后单次直达，零多余 400 往返）"""
-    model_key = (base_url.lower(), model_name.lower())
-    cached = _FAST_THINK_MODE_CACHE.get(model_key)
-    if cached is not None:
-        return [cached] if cached == "none" else [cached, "none"]
-
-    lower_url = base_url.lower()
-    lower_model = model_name.lower()
-
-    if "generativelanguage.googleapis.com" in lower_url or lower_model.startswith("gemini"):
-        return ["effort_minimal", "effort_low", "none"]
-    if "open.bigmodel.cn" in lower_url or lower_model.startswith("glm"):
-        # GLM-5 系列为始终思考模型（不支持 thinking.type=disabled，直接走 reasoning_effort=low 可将首字延迟从 ~7s 压到 ~1.7s）
-        if lower_model.startswith("glm-5"):
-            return ["effort_low", "none"]
-        return ["disabled", "effort_low", "none"]
-    return ["none"]
-
-
-def _apply_think_mode(kwargs: dict[str, Any], mode: str) -> None:
-    """将指定的低思考档位写入请求参数"""
-    kwargs.pop("reasoning_effort", None)
-    kwargs.pop("extra_body", None)
-    if mode == "disabled":
-        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-    elif mode == "effort_minimal":
-        kwargs["reasoning_effort"] = "minimal"
-    elif mode == "effort_low":
-        kwargs["reasoning_effort"] = "low"
-
-
-async def _create_async_completion_fast(
-    client: AsyncOpenAI,
-    base_kwargs: dict[str, Any],
-    base_url: str,
-    model_name: str,
-):
-    """带低思考档位自动探测与缓存的异步请求封装（遇到 400 自动滑向下一档并记忆最优档）"""
-    model_key = (base_url.lower(), model_name.lower())
-    modes = _candidate_fast_think_modes(base_url, model_name)
-    last_exc: Exception | None = None
-
-    for idx, mode in enumerate(modes):
-        req_kwargs = dict(base_kwargs)
-        _apply_think_mode(req_kwargs, mode)
-        try:
-            result = await client.chat.completions.create(**req_kwargs)
-            _FAST_THINK_MODE_CACHE[model_key] = mode
-            return result
-        except Exception as exc:
-            last_exc = exc
-            if getattr(exc, "status_code", None) == 400:
-                # 最后一档仍报 400 时，顺便剥离可选 response_format 再做一次兜底重试
-                if idx == len(modes) - 1 and "response_format" in req_kwargs:
-                    req_kwargs.pop("response_format", None)
-                    _FAST_THINK_MODE_CACHE[model_key] = "none"
-                    return await client.chat.completions.create(**req_kwargs)
-                continue
-            raise
-
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError("模型调用失败")
 
 
 def _filter_history_for_llm(recent_messages: list[dict[str, Any]], limit: int = 10) -> list[dict[str, str]]:

@@ -48,24 +48,21 @@ from app.services.tts_provider import (
 router = APIRouter(tags=["VoiceCall"])
 
 
+from app.core.settings_store import get_setting
+
+
 def _load_call_settings() -> tuple[str, dict[str, Any]]:
-    """读取当前小管家昵称与最新 TTS 配置"""
-    bot_name = "灵儿"
+    """从内存配置缓存读取小管家昵称与最新 TTS 配置（零 SQLite 延迟）"""
+    bot_name = str(get_setting("bot_name", "灵儿") or "灵儿")
     tts_cfg: dict[str, Any] = {
         "provider": "edge_tts",
         "voice": "zh-TW-HsiaoChenNeural",
         "rate": "+25%",
         "pitch": "+0Hz",
     }
-    with db_cursor() as cur:
-        cur.execute("SELECT key, value FROM settings WHERE key IN ('bot_name', 'tts');")
-        for row in cur.fetchall():
-            if row["key"] == "bot_name":
-                bot_name = str(json.loads(row["value"]) or "灵儿")
-            elif row["key"] == "tts":
-                loaded = json.loads(row["value"])
-                if isinstance(loaded, dict):
-                    tts_cfg.update(loaded)
+    loaded = get_setting("tts")
+    if isinstance(loaded, dict):
+        tts_cfg.update(loaded)
     return bot_name, tts_cfg
 
 
