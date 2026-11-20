@@ -255,6 +255,11 @@ export default function PetWindow() {
     window.taiwanBotEnv?.notifyVoiceCallOwner?.("pet");
   }, [triggerEmotion]);
 
+  const startPetCallRef = useRef(startPetCall);
+  useEffect(() => {
+    startPetCallRef.current = startPetCall;
+  }, [startPetCall]);
+
   /** 结束桌宠实时语音通话（播放 Stack 挂断音效） */
   const stopPetCall = useCallback(() => {
     playPetSound("stack");
@@ -386,22 +391,11 @@ export default function PetWindow() {
             }
 
             if (msg.type === "wakeword_detected") {
-              // 若桌宠已经在通话中，忽略唤醒提示音避免冲突
+              // 若桌宠已经在通话中，忽略唤醒事件避免冲突
               if (callOpenRef.current) return;
-              setQuickChatOpen(true);
-              triggerEmotion("listening", 0);
-
-              if (!dndRef.current && msg.sentences?.length) {
-                audioAbortRef.current?.abort();
-                const controller = new AbortController();
-                audioAbortRef.current = controller;
-                void playTaiwanSentences(msg.sentences, {
-                  muted: dndRef.current,
-                  signal: controller.signal,
-                  onStartSpeaking: () => triggerEmotion("speaking", 0),
-                  onFinishSpeaking: () => triggerEmotion("listening", 0),
-                });
-              }
+              // 与桌宠打电话保持完全统一的 UI 与全双工实时通话功能（含空格手动发送/打断、字幕、静音、插话等）
+              playPetSound("dispatch", { muted: dndRef.current });
+              startPetCallRef.current();
               return;
             }
 

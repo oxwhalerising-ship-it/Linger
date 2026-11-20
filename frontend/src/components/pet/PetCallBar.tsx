@@ -323,22 +323,25 @@ export default function PetCallBar({
     engineRef.current?.manualInterruptOrCommit();
   }, []);
 
-  // 桌宠通话浮窗也支持空格键确认发送 / 打断
+  // 桌宠通话浮窗全局空格键快捷键：手动确认发送 / 打断（捕获阶段拦截，避免触发已聚焦按钮的重复点击）
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return;
       if (
         e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target instanceof HTMLElement && e.target.isContentEditable)
       ) {
         return;
       }
-      if (e.code === "Space") {
+      if (e.code === "Space" || e.key === " ") {
         e.preventDefault();
+        e.stopPropagation();
         handleInterruptOrCommit();
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [handleInterruptOrCommit]);
 
   const handleHangUpClick = () => {
@@ -476,7 +479,7 @@ export default function PetCallBar({
           type="button"
           onClick={handleInterruptOrCommit}
           disabled={!actionActive}
-          title="灵儿说话时点击立刻打断；自己说话时点击立刻发送"
+          title="灵儿说话时按「空格」或点击立刻打断；自己说话时按「空格」或点击立刻发送"
           className={`flex-1 h-8 px-2.5 rounded-full flex items-center justify-center gap-1 text-[11.5px] font-medium transition-all active:scale-95 cursor-pointer disabled:opacity-45 disabled:cursor-default ${
             actionActive
               ? "bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-700 hover:to-sky-600 text-white shadow-[0_4px_12px_rgba(37,99,235,0.26)]"
@@ -485,6 +488,15 @@ export default function PetCallBar({
         >
           <IconHand className="w-3.5 h-3.5" />
           <span>{actionLabel}</span>
+          <kbd
+            className={`ml-0.5 px-1 py-0.2 rounded text-[9.5px] font-mono leading-tight ${
+              actionActive
+                ? "bg-white/20 text-white/95"
+                : "bg-slate-200/70 text-slate-400"
+            }`}
+          >
+            空格
+          </kbd>
         </button>
 
         <button

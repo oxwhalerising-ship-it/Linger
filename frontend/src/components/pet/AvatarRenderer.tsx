@@ -120,7 +120,7 @@ export default function AvatarRenderer({
   }
 
   // 3. 迷你头像快速路径（聊天气泡/历史列表 size <= 40）：
-  // 直接渲染单张轻量头部 PNG，避免每条消息挂载 11 层 <image> + 12 个 SVG <defs> 滤镜，DOM 节点减少 90%+
+  // 直接渲染灵儿 3D 头像 PNG，避免每条消息挂载 11 层 <image> + 12 个 SVG <defs> 滤镜，DOM 节点减少 90%+
   if (size <= 40 && !svgRef) {
     return (
       <div
@@ -128,12 +128,12 @@ export default function AvatarRenderer({
         style={{ width: size, height: size }}
       >
         <img
-          src="./linger/head_rig.png"
+          src="./linger/avatar_3d.png"
           alt="灵儿"
           draggable={false}
           loading="lazy"
           decoding="async"
-          className="w-[128%] h-[128%] max-w-none object-cover object-top translate-y-[4%]"
+          className="w-full h-full object-cover"
         />
       </div>
     );

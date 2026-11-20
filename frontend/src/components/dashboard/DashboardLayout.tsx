@@ -26,7 +26,6 @@ import {
   IconMoon,
   IconSettings,
   IconSidebar,
-  IconSparkles,
   IconSun,
   IconWindow,
 } from "./AppleIcons";
@@ -381,9 +380,12 @@ export default function DashboardLayout() {
                 className="flex items-center h-9 rounded-[10px] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer overflow-hidden min-w-9"
               >
                 <span className="w-9 h-9 flex items-center justify-center shrink-0">
-                  <span className="w-7 h-7 rounded-[8px] bg-[var(--ink-primary)] text-[var(--ink-primary-fg)] flex items-center justify-center">
-                    <IconSparkles className="w-4 h-4" />
-                  </span>
+                  <img
+                    src="./linger/app_icon.png"
+                    alt="灵儿管家"
+                    draggable={false}
+                    className="w-7 h-7 rounded-[8px] object-cover shadow-xs"
+                  />
                 </span>
                 {!isCompact && (
                   <span className="text-[14px] font-semibold tracking-tight text-[var(--text-primary)] truncate whitespace-nowrap pr-2">

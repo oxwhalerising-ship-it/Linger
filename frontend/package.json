@@ -24,6 +24,7 @@
       "electron/**/*"
     ],
     "win": {
+      "icon": "electron/assets/linger-icon.ico",
       "target": [
         {
           "target": "nsis",

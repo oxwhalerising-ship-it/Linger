@@ -66,68 +66,22 @@ let externalWindowTrackProc = null;
 let dockDetectSeq = 0;
 let summonShortcutLabel = "Alt+Shift+L";
 
+const APP_ICON_ICO = path.join(__dirname, "assets", "linger-icon.ico");
+const APP_ICON_PNG = path.join(__dirname, "assets", "linger-icon.png");
+
 /**
- * 动态生成 16x16 的暖黄色治愈系小精灵托盘图标（无需外部 .ico 文件即可在 Windows 稳定显示）
+ * 加载灵儿专属系统托盘图标（优先高精度 PNG 缩放至 32x32 适配 Windows HiDPI）
  */
 function createTrayIcon() {
-  const size = 16;
-  const buffer = Buffer.alloc(size * size * 4);
-  const cx = 7.5;
-  const cy = 8.0;
-
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const idx = (y * size + x) * 4;
-      const dx = x - cx;
-      const dy = y - cy;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-
-      // 默认透明像素
-      let r = 0;
-      let g = 0;
-      let b = 0;
-      let a = 0;
-
-      // 头顶小嫩芽（绿色像素）
-      if ((x === 7 || x === 8) && (y === 1 || y === 2)) {
-        r = 74;
-        g = 222;
-        b = 128;
-        a = 255;
-      } else if (dist <= 6.2) {
-        // 小精灵圆润主体（暖橘杏色）
-        r = 251;
-        g = 191;
-        b = 36;
-        a = 255;
-        // 外圈微深轮廓
-        if (dist > 5.2) {
-          r = 245;
-          g = 158;
-          b = 11;
-        }
-        // 两只可爱深棕色小眼睛
-        if ((x === 5 || x === 10) && y === 8) {
-          r = 68;
-          g = 64;
-          b = 60;
-        }
-        // 粉红腮红
-        if ((x === 4 || x === 11) && y === 9) {
-          r = 251;
-          g = 113;
-          b = 133;
-        }
-      }
-
-      buffer[idx] = r;
-      buffer[idx + 1] = g;
-      buffer[idx + 2] = b;
-      buffer[idx + 3] = a;
-    }
+  const pngImg = nativeImage.createFromPath(APP_ICON_PNG);
+  if (!pngImg.isEmpty()) {
+    return pngImg.resize({ width: 32, height: 32, quality: "best" });
   }
-
-  return nativeImage.createFromBuffer(buffer, { width: size, height: size });
+  const icoImg = nativeImage.createFromPath(APP_ICON_ICO);
+  if (!icoImg.isEmpty()) {
+    return icoImg;
+  }
+  return nativeImage.createEmpty();
 }
 
 /**
@@ -872,10 +826,14 @@ function setPetWindowMode(nextMode) {
   applyPetWindowBounds(nextX, nextY, targetW, targetH);
   lockPetWindowZoom();
 
-  // 仅快捷输入框需要键盘聚焦；通话态保持不抢占办公窗口焦点，且仍可正常点击静音/打断/挂断按钮
-  const needsKeyboardFocus = normalized === "quick-chat";
+  // 快捷输入与实时通话态均需允许键盘聚焦，确保桌宠对话/打电话时可直接按「空格键」手动确认发送或打断
+  const needsKeyboardFocus =
+    normalized === "quick-chat" || normalized === "call";
   petWindow.setFocusable(needsKeyboardFocus);
   if (needsKeyboardFocus) {
+    if (!petWindow.isVisible()) {
+      petWindow.show();
+    }
     petWindow.focus();
   }
 }
@@ -899,6 +857,7 @@ function createPetWindow() {
     x: pos.x,
     y: pos.y,
     title: "",
+    icon: APP_ICON_ICO,
     transparent: true,
     backgroundColor: "#00000000",
     backgroundMaterial: "none",
@@ -1000,6 +959,7 @@ function openDashboardWindow() {
     minWidth: 780,
     minHeight: 560,
     title: "灵儿 — 台湾腔治愈系小管家",
+    icon: APP_ICON_ICO,
     backgroundColor: "#ffffff",
     webPreferences: {
       contextIsolation: true,
