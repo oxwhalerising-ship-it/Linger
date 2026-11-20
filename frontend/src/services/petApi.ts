@@ -7,6 +7,9 @@
  */
 
 import type { PetEmotion } from "../types/pet";
+import { getBackendBaseUrl, requestJson } from "./api/client";
+
+export { getBackendBaseUrl };
 
 export type ChatMode =
   | "normal"
@@ -39,28 +42,20 @@ export interface ChatResponseData {
   md_path: string;
 }
 
-/** 获取后端基础地址 */
-export function getBackendBaseUrl(): string {
-  return window.taiwanBotEnv?.backendBaseUrl ?? "http://127.0.0.1:8765";
-}
-
-/** 发送一轮对话给台湾腔小管家 */
+/** 发送一轮对话给台湾腔小管家（自动带超时保护与 FastAPI detail 错误解析） */
 export async function sendQuickChat(
   message: string,
   mode: ChatMode = "normal",
   triggerType: "manual" | "schedule" | "random" | "wakeword" = "manual",
 ): Promise<ChatResponseData> {
-  const response = await fetch(`${getBackendBaseUrl()}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, mode, trigger_type: triggerType }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`对话接口请求失败（HTTP ${response.status}）`);
-  }
-
-  return (await response.json()) as ChatResponseData;
+  return requestJson<ChatResponseData>(
+    "/api/chat",
+    {
+      method: "POST",
+      body: JSON.stringify({ message, mode, trigger_type: triggerType }),
+    },
+    60_000,
+  );
 }
 
 /** 播放 0.3 秒本地缓存的台湾腔反应垫词（例如「嗯嗯～」），让等待 LLM 回复时也有活人感 */

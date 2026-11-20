@@ -11,6 +11,7 @@
  */
 
 import { getVoiceCallWebSocketUrl } from "./api";
+import { encodePcmWav16kBuffer } from "./voice/pcmWavEncoder";
 import type { ChatMode } from "./petApi";
 import type { PetEmotion } from "../types/pet";
 
@@ -60,67 +61,6 @@ export interface VoiceCallCallbacks {
   onBargeIn?: (turnId: number) => void;
   onWarning?: (message: string) => void;
   onError?: (message: string) => void;
-}
-
-/** 将多帧 Float32 麦克风采样重采样到 16kHz 单声道并编码为标准 16-bit PCM WAV ArrayBuffer */
-function encodePcmWav16kBuffer(
-  chunks: Float32Array[],
-  inputSampleRate: number,
-): ArrayBuffer {
-  const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
-  const merged = new Float32Array(totalLen);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  const targetRate = 16000;
-  const ratio = inputSampleRate / targetRate;
-  const outputLen = Math.max(1, Math.floor(merged.length / ratio));
-  const resampled = new Float32Array(outputLen);
-  for (let i = 0; i < outputLen; i++) {
-    const pos = i * ratio;
-    const idx = Math.floor(pos);
-    const frac = pos - idx;
-    const s1 = merged[idx] ?? 0;
-    const s2 = merged[Math.min(idx + 1, merged.length - 1)] ?? 0;
-    resampled[i] = s1 + (s2 - s1) * frac;
-  }
-
-  const buffer = new ArrayBuffer(44 + resampled.length * 2);
-  const view = new DataView(buffer);
-  const writeStr = (pos: number, text: string) => {
-    for (let i = 0; i < text.length; i++) {
-      view.setUint8(pos + i, text.charCodeAt(i));
-    }
-  };
-
-  writeStr(0, "RIFF");
-  view.setUint32(4, 36 + resampled.length * 2, true);
-  writeStr(8, "WAVE");
-  writeStr(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, targetRate, true);
-  view.setUint32(28, targetRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeStr(36, "data");
-  view.setUint32(40, resampled.length * 2, true);
-
-  let dataPos = 44;
-  for (let i = 0; i < resampled.length; i++) {
-    const clamped = Math.max(-1, Math.min(1, resampled[i]));
-    view.setInt16(
-      dataPos,
-      clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff,
-      true,
-    );
-    dataPos += 2;
-  }
-  return buffer;
 }
 
 /** 将 Base64 字符串高效解码为 ArrayBuffer（供 Web Audio decodeAudioData 使用） */
@@ -627,8 +567,9 @@ export class VoiceCallEngine {
     this.callbacks.onBotVolume?.(0);
   }
 
-  /** 60fps 读取灵儿语音输出能量，驱动中心声波光环随声音真实律动 */
+  /** 60fps 读取灵儿语音输出能量（静音时仅触发一次归零，避免空转触发 60Hz React 重渲染） */
   private startBotVolumeMeter(): void {
+    let lastWasActive = false;
     const tick = () => {
       if (this.disposed) return;
       if (
@@ -636,6 +577,7 @@ export class VoiceCallEngine {
         this.analyserData &&
         this.activeSources.size > 0
       ) {
+        lastWasActive = true;
         this.analyser.getByteTimeDomainData(this.analyserData);
         let sumSq = 0;
         for (let i = 0; i < this.analyserData.length; i++) {
@@ -644,7 +586,8 @@ export class VoiceCallEngine {
         }
         const rms = Math.sqrt(sumSq / this.analyserData.length);
         this.callbacks.onBotVolume?.(Math.min(1, rms * 4.2));
-      } else {
+      } else if (lastWasActive) {
+        lastWasActive = false;
         this.callbacks.onBotVolume?.(0);
       }
       this.botMeterRaf = window.requestAnimationFrame(tick);
@@ -652,12 +595,18 @@ export class VoiceCallEngine {
     this.botMeterRaf = window.requestAnimationFrame(tick);
   }
 
+  private lastMutedEmitted = false;
+
   /** 每 ~42ms 处理一帧麦克风采样：驱动音量指示、自适应 VAD 与防回声随时插话打断 */
   private handleMicFrame(rawFrame: Float32Array): void {
     if (this.muted) {
-      this.callbacks.onMicVolume?.(0);
+      if (!this.lastMutedEmitted) {
+        this.lastMutedEmitted = true;
+        this.callbacks.onMicVolume?.(0);
+      }
       return;
     }
+    this.lastMutedEmitted = false;
 
     const frame = new Float32Array(rawFrame);
     let sumSq = 0;

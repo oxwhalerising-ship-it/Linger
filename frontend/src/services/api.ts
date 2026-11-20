@@ -5,7 +5,13 @@
  * 包括健康检查、聊天历史、习惯、每日复盘/热力图、长期记忆、周月报与系统设置。
  */
 
-import { getBackendBaseUrl } from "./petApi";
+import {
+  getBackendBaseUrl,
+  getWebSocketUrl,
+  requestJson,
+} from "./api/client";
+
+export { getBackendBaseUrl };
 
 export interface HealthData {
   status: string;
@@ -213,37 +219,12 @@ export interface ScheduleStatusData {
 
 /** 构造后端 WebSocket 实时事件推送地址（ws://127.0.0.1:8765/ws/events） */
 export function getEventsWebSocketUrl(): string {
-  const httpBase = getBackendBaseUrl().replace(/\/+$/, "");
-  const wsBase = httpBase.replace(/^http/, "ws");
-  return `${wsBase}/ws/events`;
+  return getWebSocketUrl("/ws/events");
 }
 
 /** 构造后端一对一实时语音通话 WebSocket 地址（ws://127.0.0.1:8765/ws/voice-call） */
 export function getVoiceCallWebSocketUrl(): string {
-  const httpBase = getBackendBaseUrl().replace(/\/+$/, "");
-  const wsBase = httpBase.replace(/^http/, "ws");
-  return `${wsBase}/ws/voice-call`;
-}
-
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${getBackendBaseUrl()}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try {
-      const errBody = await res.json();
-      if (errBody?.detail) detail = String(errBody.detail);
-    } catch {
-      // ignore json parse error
-    }
-    throw new Error(detail);
-  }
-  return (await res.json()) as T;
+  return getWebSocketUrl("/ws/voice-call");
 }
 
 /** 格式化本地日期为 YYYY-MM-DD */

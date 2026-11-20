@@ -7,69 +7,9 @@
  * 3. 若本机尚未下载 sherpa-onnx 模型，可优雅回退到浏览器原生 SpeechRecognition（zh-TW），开箱即用。
  */
 
+import { encodePcmWav16kBlob } from "./voice/pcmWavEncoder";
+
 export type VoiceInputMode = "push_to_talk" | "hands_free_vad";
-
-/** 将原始 Float32 音频重采样到 16kHz 并编码为 16-bit PCM WAV Blob */
-function encodePcmWav16k(chunks: Float32Array[], inputSampleRate: number): Blob {
-  const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
-  const merged = new Float32Array(totalLen);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  // 线性插值重采样至 16000Hz
-  const targetRate = 16000;
-  const ratio = inputSampleRate / targetRate;
-  const outputLen = Math.max(1, Math.floor(merged.length / ratio));
-  const resampled = new Float32Array(outputLen);
-  for (let i = 0; i < outputLen; i++) {
-    const pos = i * ratio;
-    const idx = Math.floor(pos);
-    const frac = pos - idx;
-    const s1 = merged[idx] ?? 0;
-    const s2 = merged[Math.min(idx + 1, merged.length - 1)] ?? 0;
-    resampled[i] = s1 + (s2 - s1) * frac;
-  }
-
-  // 写入 44 字节标准 WAV 文件头 + PCM 16-bit 数据
-  const buffer = new ArrayBuffer(44 + resampled.length * 2);
-  const view = new DataView(buffer);
-
-  const writeStr = (pos: number, text: string) => {
-    for (let i = 0; i < text.length; i++) {
-      view.setUint8(pos + i, text.charCodeAt(i));
-    }
-  };
-
-  writeStr(0, "RIFF");
-  view.setUint32(4, 36 + resampled.length * 2, true);
-  writeStr(8, "WAVE");
-  writeStr(12, "fmt ");
-  view.setUint32(16, 16, true); // PCM chunk size
-  view.setUint16(20, 1, true); // AudioFormat = PCM
-  view.setUint16(22, 1, true); // Mono
-  view.setUint32(24, targetRate, true);
-  view.setUint32(28, targetRate * 2, true); // ByteRate
-  view.setUint16(32, 2, true); // BlockAlign
-  view.setUint16(34, 16, true); // BitsPerSample
-  writeStr(36, "data");
-  view.setUint32(40, resampled.length * 2, true);
-
-  let dataPos = 44;
-  for (let i = 0; i < resampled.length; i++) {
-    const clamped = Math.max(-1, Math.min(1, resampled[i]));
-    view.setInt16(
-      dataPos,
-      clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff,
-      true,
-    );
-    dataPos += 2;
-  }
-
-  return new Blob([buffer], { type: "audio/wav" });
-}
 
 export interface RecorderCallbacks {
   onVolumeChange?: (level: number) => void;
@@ -205,7 +145,7 @@ export class LocalWavRecorder {
     this.stream = null;
 
     if (this.chunks.length === 0) return null;
-    const wavBlob = encodePcmWav16k(this.chunks, this.sampleRate);
+    const wavBlob = encodePcmWav16kBlob(this.chunks, this.sampleRate);
     this.chunks = [];
     return wavBlob;
   }

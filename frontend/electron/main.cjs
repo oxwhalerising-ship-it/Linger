@@ -8,7 +8,6 @@
  */
 
 const path = require("path");
-const { execFile, spawn } = require("child_process");
 const {
   app,
   BrowserWindow,
@@ -19,6 +18,8 @@ const {
   nativeImage,
   globalShortcut,
 } = require("electron");
+const { attachWindowSecurityGuards } = require("./security.cjs");
+const { createWin32WindowTracker } = require("./docking/win32Tracker.cjs");
 
 let petWindow = null;
 let dashboardWindow = null;
@@ -235,16 +236,14 @@ function animatePetWindowTo(targetX, targetY, durationMs = 220, onDone) {
   }, 16);
 }
 
+const win32WindowTracker = createWin32WindowTracker({
+  screen,
+  getPetWindow: () => petWindow,
+});
+
 /** 停止外部应用窗口实时跟随子进程 */
 function stopExternalWindowTracker() {
-  if (externalWindowTrackProc) {
-    try {
-      externalWindowTrackProc.kill();
-    } catch {
-      // ignore kill errors
-    }
-    externalWindowTrackProc = null;
-  }
+  win32WindowTracker.stop();
 }
 
 /** 根据宿主窗口矩形与锚点偏移，计算桌宠跟随位置并立即同步 */
@@ -266,119 +265,28 @@ function syncPetToHostRect(hostRect) {
   petWindow.setBounds({ x: nextX, y: nextY, width: targetW, height: targetH });
 }
 
-/** 启动单窗口轻量化外部应用位置追踪器（仅在吸附到外部应用窗口时运行，脱离立即销毁） */
+/** 启动单窗口轻量化外部应用位置追踪器（已抽离至 docking/win32Tracker.cjs） */
 function startExternalWindowTracker(hwnd) {
-  stopExternalWindowTracker();
-  if (process.platform !== "win32" || !hwnd) return;
-
-  const psTracker = `
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class SingleHwndTracker {
-  [StructLayout(LayoutKind.Sequential)]
-  public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
-  public static string Poll(long h) {
-    IntPtr hWnd = new IntPtr(h);
-    if (!IsWindow(hWnd) || !IsWindowVisible(hWnd) || IsIconic(hWnd)) return "GONE";
-    RECT r;
-    if (DwmGetWindowAttribute(hWnd, 9, out r, Marshal.SizeOf(typeof(RECT))) != 0) {
-      if (!GetWindowRect(hWnd, out r)) return "GONE";
-    }
-    int w = r.Right - r.Left;
-    int hgt = r.Bottom - r.Top;
-    if (w < 80 || hgt < 60) return "GONE";
-    return r.Left + "," + r.Top + "," + w + "," + hgt;
-  }
-}
-"@
-$last = ""
-while ($true) {
-  $res = [SingleHwndTracker]::Poll(${hwnd})
-  if ($res -eq "GONE") {
-    [Console]::Out.WriteLine("GONE")
-    [Console]::Out.Flush()
-    break
-  }
-  if ($res -ne $last) {
-    $last = $res
-    [Console]::Out.WriteLine("MOVE:" + $res)
-    [Console]::Out.Flush()
-  }
-  Start-Sleep -Milliseconds 30
-}
-`;
-  if (!Number.isSafeInteger(hwnd) || hwnd <= 0) {
-    return;
-  }
-  try {
-    const proc = spawn(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", psTracker],
-      { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
-    );
-    externalWindowTrackProc = proc;
-    proc.on("error", () => {
-      if (externalWindowTrackProc === proc) {
-        externalWindowTrackProc = null;
+  win32WindowTracker.start(hwnd, {
+    onGone: (targetHwnd) => {
+      if (petDockState.mode === "window-dock" && petDockState.targetHwnd === targetHwnd) {
+        clearPetDockState(true);
       }
-    });
-    let buf = "";
-    proc.stdout.on("data", (chunk) => {
-      if (externalWindowTrackProc !== proc) return;
-      buf += chunk.toString("utf8");
-      const lines = buf.split(/\r?\n/);
-      buf = lines.pop() || "";
-      for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line) continue;
-        if (line === "GONE") {
-          if (petDockState.mode === "window-dock" && petDockState.targetHwnd === hwnd) {
-            clearPetDockState(true);
-          }
-          return;
-        }
-        if (line.startsWith("MOVE:")) {
-          if (
-            petDockState.mode !== "window-dock" ||
-            petDockState.targetHwnd !== hwnd ||
-            !petWindow ||
-            petWindow.isDestroyed() ||
-            petDragState
-          ) {
-            continue;
-          }
-          const parts = line.slice(5).split(",").map(Number);
-          if (parts.length === 4 && parts.every(Number.isFinite)) {
-            try {
-              const dip = screen.screenToDipRect(petWindow, {
-                x: parts[0],
-                y: parts[1],
-                width: parts[2],
-                height: parts[3],
-              });
-              stopPetSlideAnim();
-              syncPetToHostRect(dip);
-            } catch {
-              // ignore conversion error
-            }
-          }
-        }
+    },
+    onMove: (targetHwnd, dip) => {
+      if (
+        petDockState.mode !== "window-dock" ||
+        petDockState.targetHwnd !== targetHwnd ||
+        !petWindow ||
+        petWindow.isDestroyed() ||
+        petDragState
+      ) {
+        return;
       }
-    });
-    proc.on("exit", () => {
-      if (externalWindowTrackProc === proc) {
-        externalWindowTrackProc = null;
-      }
-    });
-  } catch {
-    externalWindowTrackProc = null;
-  }
+      stopPetSlideAnim();
+      syncPetToHostRect(dip);
+    },
+  });
 }
 
 /** 重置边缘躲藏/窗口依附状态并通知渲染层 */
@@ -403,100 +311,9 @@ function clearPetDockState(notifyRenderer = true) {
   }
 }
 
-/**
- * 在 Windows 上查询当前可见的顶层应用窗口矩形（物理像素 -> Electron DIPs）
- * 仅在拖拽结束时按需异步调用，平时零 CPU 占用。
- */
+/** 在 Windows 上查询当前可见的顶层应用窗口矩形（已抽离至 docking/win32Tracker.cjs） */
 function queryVisibleAppWindowRects() {
-  return new Promise((resolve) => {
-    if (process.platform !== "win32" || !petWindow || petWindow.isDestroyed()) {
-      resolve([]);
-      return;
-    }
-    const psScript = `
-Add-Type -TypeDefinition @"
-using System;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-using System.Text;
-public class WinEnumHelper {
-  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-  [StructLayout(LayoutKind.Sequential)]
-  public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
-  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
-  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
-  public static string ListRects(uint skipPid) {
-    var list = new List<string>();
-    EnumWindows((hWnd, lParam) => {
-      if (!IsWindowVisible(hWnd) || IsIconic(hWnd)) return true;
-      uint pid; GetWindowThreadProcessId(hWnd, out pid);
-      if (pid == skipPid) return true;
-      int cloaked = 0;
-      DwmGetWindowAttribute(hWnd, 14, out cloaked, Marshal.SizeOf(typeof(int)));
-      if (cloaked != 0) return true;
-      var cls = new StringBuilder(64);
-      GetClassName(hWnd, cls, cls.Capacity);
-      string c = cls.ToString();
-      if (c == "Shell_TrayWnd" || c == "Shell_SecondaryTrayWnd" || c == "Progman" || c == "WorkerW" || c == "Windows.UI.Core.CoreWindow") return true;
-      RECT r;
-      if (DwmGetWindowAttribute(hWnd, 9, out r, Marshal.SizeOf(typeof(RECT))) != 0) {
-        if (!GetWindowRect(hWnd, out r)) return true;
-      }
-      int w = r.Right - r.Left;
-      int h = r.Bottom - r.Top;
-      if (w < 160 || h < 120) return true;
-      list.Add(hWnd.ToInt64() + "," + r.Left + "," + r.Top + "," + w + "," + h);
-      return true;
-    }, IntPtr.Zero);
-    return string.Join(";", list);
-  }
-}
-"@
-[WinEnumHelper]::ListRects(${process.pid})
-`;
-    execFile(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", psScript],
-      { timeout: 1800, windowsHide: true },
-      (err, stdout) => {
-        if (err || !stdout || !petWindow || petWindow.isDestroyed()) {
-          resolve([]);
-          return;
-        }
-        const raw = stdout.trim();
-        if (!raw) {
-          resolve([]);
-          return;
-        }
-        const rects = [];
-        for (const token of raw.split(";")) {
-          const parts = token.split(",").map(Number);
-          if (parts.length === 5 && parts.every(Number.isFinite)) {
-            try {
-              const dip = screen.screenToDipRect(petWindow, {
-                x: parts[1],
-                y: parts[2],
-                width: parts[3],
-                height: parts[4],
-              });
-              if (dip.width >= 140 && dip.height >= 100) {
-                rects.push({ hwnd: parts[0], ...dip });
-              }
-            } catch {
-              // ignore conversion errors
-            }
-          }
-        }
-        resolve(rects);
-      },
-    );
-  });
+  return win32WindowTracker.queryVisibleAppWindowRects();
 }
 
 /** 检测灵儿是否靠近某个目标窗口的四条边框，返回最佳吸附姿态与锚点偏移 */
@@ -1131,6 +948,7 @@ function createPetWindow() {
     sendToPet("pet:dnd-changed", isDndEnabled);
   });
 
+  attachWindowSecurityGuards(petWindow);
   loadWindowPage(petWindow, "pet");
 
   petWindow.on("blur", () => {
@@ -1194,6 +1012,7 @@ function openDashboardWindow() {
     event.preventDefault();
   });
 
+  attachWindowSecurityGuards(dashboardWindow);
   loadWindowPage(dashboardWindow, "dashboard");
 
   dashboardWindow.once("ready-to-show", () => {
@@ -1259,9 +1078,16 @@ function openDashboardWindow() {
  * 向桌宠窗口发送指令事件（如切换表情、开关免打扰、弹出快捷输入、拨号通话）
  */
 function sendToPet(channel, payload) {
-  if (petWindow && !petWindow.isDestroyed()) {
-    petWindow.webContents.send(channel, payload);
+  if (!petWindow || petWindow.isDestroyed()) return;
+  if (petWindow.webContents.isLoading()) {
+    petWindow.webContents.once("did-finish-load", () => {
+      if (petWindow && !petWindow.isDestroyed()) {
+        petWindow.webContents.send(channel, payload);
+      }
+    });
+    return;
   }
+  petWindow.webContents.send(channel, payload);
 }
 
 /**
