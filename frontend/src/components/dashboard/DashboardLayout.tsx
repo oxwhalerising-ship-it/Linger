@@ -30,12 +30,14 @@ import {
   IconSun,
   IconWindow,
 } from "./AppleIcons";
+import { lazy, Suspense } from "react";
 import ChatView from "./ChatView";
-import HabitsView from "./HabitsView";
-import HistoryView from "./HistoryView";
-import JournalView from "./JournalView";
-import ReportsView from "./ReportsView";
-import SettingsView from "./SettingsView";
+
+const HabitsView = lazy(() => import("./HabitsView"));
+const HistoryView = lazy(() => import("./HistoryView"));
+const JournalView = lazy(() => import("./JournalView"));
+const ReportsView = lazy(() => import("./ReportsView"));
+const SettingsView = lazy(() => import("./SettingsView"));
 
 export type TabId =
   | "chat"
@@ -595,14 +597,24 @@ export default function DashboardLayout() {
         </div>
       )}
 
-      {/* 右侧主画布 */}
+      {/* 右侧主画布（次级视图按需懒加载，缩短控制台首屏解析耗时） */}
       <main className="flex-1 min-w-0 h-full overflow-hidden bg-[var(--bg-canvas)]">
         {activeTab === "chat" && <ChatView {...viewProps} />}
-        {activeTab === "history" && <HistoryView {...viewProps} />}
-        {activeTab === "habits" && <HabitsView {...viewProps} />}
-        {activeTab === "journal" && <JournalView {...viewProps} />}
-        {activeTab === "reports" && <ReportsView {...viewProps} />}
-        {activeTab === "settings" && <SettingsView {...viewProps} />}
+        {activeTab !== "chat" && (
+          <Suspense
+            fallback={
+              <div className="h-full w-full flex items-center justify-center text-sm text-[var(--text-muted)]">
+                加载中…
+              </div>
+            }
+          >
+            {activeTab === "history" && <HistoryView {...viewProps} />}
+            {activeTab === "habits" && <HabitsView {...viewProps} />}
+            {activeTab === "journal" && <JournalView {...viewProps} />}
+            {activeTab === "reports" && <ReportsView {...viewProps} />}
+            {activeTab === "settings" && <SettingsView {...viewProps} />}
+          </Suspense>
+        )}
       </main>
     </div>
   );

@@ -887,6 +887,11 @@ export default function LingerAvatar({
     let lastMs = performance.now();
 
     const tick = (now: number) => {
+      if (document.hidden) {
+        lastMs = now;
+        rafId = requestAnimationFrame(tick);
+        return;
+      }
       const dt = Math.min(0.05, Math.max(0.004, (now - lastMs) / 1000));
       lastMs = now;
       const tSec = now / 1000;

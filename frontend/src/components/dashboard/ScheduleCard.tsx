@@ -14,6 +14,7 @@ import {
   type ScheduleEventType,
   type ScheduleStatusData,
 } from "../../services/api";
+import Switch from "../ui/Switch";
 
 const FIXED_NODES: Array<{
   key: "morning_plan" | "noon_checkin" | "evening_review" | "bedtime_nudge";
@@ -25,33 +26,6 @@ const FIXED_NODES: Array<{
   { key: "evening_review", label: "晚间复盘", desc: "核对未记录的习惯清单与收集小确幸" },
   { key: "bedtime_nudge", label: "睡前催睡", desc: "温柔提醒放下手机、早点休息" },
 ];
-
-function Switch({
-  checked,
-  onChange,
-  disabled,
-}: {
-  checked: boolean;
-  onChange: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={onChange}
-      className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center cursor-pointer disabled:opacity-40 shrink-0 ${
-        checked
-          ? "bg-emerald-500 justify-end"
-          : "bg-[var(--border-strong)] justify-start"
-      }`}
-    >
-      <span className="w-4 h-4 rounded-full bg-white shadow-xs" />
-    </button>
-  );
-}
 
 export default function ScheduleCard({
   onToast,

@@ -249,29 +249,6 @@ html.pet-mode body {
   }
 }
 
-/* 说话嘴巴开合动画 */
-@keyframes petMouthTalk {
-  0%,
-  100% {
-    transform: scaleY(0.55);
-  }
-  50% {
-    transform: scaleY(1.25);
-  }
-}
-
-/* 自然眨眼 */
-@keyframes petBlink {
-  0%,
-  92%,
-  100% {
-    transform: scaleY(1);
-  }
-  96% {
-    transform: scaleY(0.1);
-  }
-}
-
 /* 倾听声波扩散圈 */
 @keyframes petPulseRing {
   0% {
@@ -280,21 +257,6 @@ html.pet-mode body {
   }
   100% {
     transform: scale(1.25);
-    opacity: 0;
-  }
-}
-
-/* 睡眠 Zzz 上浮淡出 */
-@keyframes petZzzFloat {
-  0% {
-    transform: translate(0px, 4px) scale(0.8);
-    opacity: 0;
-  }
-  30% {
-    opacity: 0.9;
-  }
-  100% {
-    transform: translate(10px, -16px) scale(1.1);
     opacity: 0;
   }
 }
@@ -331,28 +293,24 @@ html.pet-mode body {
   animation: petEncourage 1.1s ease-in-out infinite;
 }
 
-.animate-pet-mouth {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: petMouthTalk 0.28s ease-in-out infinite;
-}
-
-.animate-pet-blink {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: petBlink 4.6s ease-in-out infinite;
-}
-
 .animate-pet-pulse-ring {
   animation: petPulseRing 1.6s ease-out infinite;
 }
 
-.animate-pet-zzz {
-  animation: petZzzFloat 2.4s ease-in-out infinite;
-}
-
 .animate-bubble-pop {
   animation: bubblePopIn 0.24s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pet-float,
+  .animate-pet-bounce,
+  .animate-pet-talk,
+  .animate-pet-sleepy,
+  .animate-pet-encourage,
+  .animate-pet-pulse-ring,
+  .animate-bubble-pop {
+    animation: none !important;
+  }
 }
 
 /* 灵儿通话态蓝白水晶星辉旋转光环 */

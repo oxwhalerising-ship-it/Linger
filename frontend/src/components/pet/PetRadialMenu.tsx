@@ -267,6 +267,7 @@ export default function PetRadialMenu({
           >
             <button
               type="button"
+              tabIndex={open ? 0 : -1}
               onClick={(e) => {
                 e.stopPropagation();
                 playPetSound("notch", { muted: dndEnabled });

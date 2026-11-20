@@ -8,33 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type WakewordStatusData } from "../../services/api";
-
-function Switch({
-  checked,
-  onChange,
-  disabled,
-}: {
-  checked: boolean;
-  onChange: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={onChange}
-      className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center cursor-pointer disabled:opacity-40 shrink-0 ${
-        checked
-          ? "bg-emerald-500 justify-end"
-          : "bg-[var(--border-strong)] justify-start"
-      }`}
-    >
-      <span className="w-4 h-4 rounded-full bg-white shadow-xs" />
-    </button>
-  );
-}
+import Switch from "../ui/Switch";
 
 export default function WakewordCard({
   onToast,

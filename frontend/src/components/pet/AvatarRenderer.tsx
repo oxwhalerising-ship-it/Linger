@@ -119,7 +119,27 @@ export default function AvatarRenderer({
     );
   }
 
-  // 3. 默认使用内置「灵儿」3D 分层可交互形象
+  // 3. 迷你头像快速路径（聊天气泡/历史列表 size <= 40）：
+  // 直接渲染单张轻量头部 PNG，避免每条消息挂载 11 层 <image> + 12 个 SVG <defs> 滤镜，DOM 节点减少 90%+
+  if (size <= 40 && !svgRef) {
+    return (
+      <div
+        className="relative flex items-center justify-center rounded-full overflow-hidden bg-sky-50/90 border border-sky-200/70 select-none shrink-0"
+        style={{ width: size, height: size }}
+      >
+        <img
+          src="./linger/head_rig.png"
+          alt="灵儿"
+          draggable={false}
+          loading="lazy"
+          decoding="async"
+          className="w-[128%] h-[128%] max-w-none object-cover object-top translate-y-[4%]"
+        />
+      </div>
+    );
+  }
+
+  // 4. 默认使用内置「灵儿」3D 分层可交互形象
   return (
     <LingerAvatar
       emotion={emotion}

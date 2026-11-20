@@ -12,6 +12,7 @@ import {
   type HabitItem,
   type HabitRecordItem,
 } from "../../services/api";
+import { useToast } from "../../hooks/useToast";
 import type { DashboardViewProps } from "./DashboardLayout";
 import {
   IconCheck,
@@ -35,7 +36,7 @@ export default function HabitsView({
   const [targetDesc, setTargetDesc] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const { toast, showToast } = useToast(2600);
 
   const today = formatLocalDate();
 
@@ -52,18 +53,13 @@ export default function HabitsView({
       }
       setTodayRecords(map);
     } catch {
-      setToast("加载习惯数据失败，请检查后端连接");
+      showToast("加载习惯数据失败，请检查后端连接");
     }
-  }, [today]);
+  }, [today, showToast]);
 
   useEffect(() => {
     void loadData();
   }, [loadData]);
-
-  const showToast = (msg: string) => {
-    setToast(msg);
-    window.setTimeout(() => setToast(null), 2600);
-  };
 
   const handleCreateHabit = async (e: FormEvent) => {
     e.preventDefault();
