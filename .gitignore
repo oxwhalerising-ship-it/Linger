@@ -1,0 +1,49 @@
+# Python 虚拟环境与缓存
+backend/.venv/
+.venv/
+venv/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Node / Electron 依赖与构建产物
+frontend/node_modules/
+frontend/dist/
+frontend/release/
+frontend/out/
+frontend/.vite/
+
+# 本地隐私数据、缓存与环境变量（不提交到 Git）
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/notes/
+data/audio_cache/
+.env
+.env.*
+*.local
+
+# 本地部署的 AI 模型权重与压缩包（通过 backend/scripts/download_models.py 按需拉取）
+data/models/
+*.onnx
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+*.gguf
+*.tar.bz2
+
+# 非运行时设计参考图与表情包原稿（~18.5MB，代码未引用）
+bot_images/
+
+# 日志、临时文件与编辑器/系统杂项
+logs/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

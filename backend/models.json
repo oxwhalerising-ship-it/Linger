@@ -1,0 +1,31 @@
+{
+  "models": [
+    {
+      "id": "asr",
+      "name": "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+      "description": "SenseVoice int8 本地离线多语种语音识别模型（中/英/日/韩/粤）",
+      "type": "tar.bz2",
+      "target_dir": "data/models/asr",
+      "check_file": "data/models/asr/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/model.int8.onnx",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2"
+    },
+    {
+      "id": "kws",
+      "name": "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01",
+      "description": "Zipformer WenetSpeech 3.3M 本地离线中文关键词唤醒模型",
+      "type": "tar.bz2",
+      "target_dir": "data/models/kws",
+      "check_file": "data/models/kws/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01/tokens.txt",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2"
+    },
+    {
+      "id": "whisper",
+      "name": "Systran/faster-whisper-small",
+      "description": "Faster-Whisper Small 本地高精度语音识别模型（可选，支持 CPU/CUDA）",
+      "type": "huggingface",
+      "repo_id": "Systran/faster-whisper-small",
+      "target_dir": "data/models/faster-whisper",
+      "check_glob": "data/models/faster-whisper/models--Systran--faster-whisper-small/snapshots/*/model.bin"
+    }
+  ]
+}

@@ -1,0 +1,221 @@
+"""
+每日复盘与习惯打卡路由（/api/logs）
+-----------------------------------
+提供按月查询复盘热力图、查看/更新某日复盘摘要与小确幸、
+以及写入/覆盖某日习惯打卡记录的接口；每次写入都会自动同步更新本地 Markdown 日记。
+"""
+
+import json
+import re
+from datetime import datetime
+from fastapi import APIRouter, HTTPException, Query
+
+from app.database import db_cursor
+from app.schemas import DailyLogOut, DailyLogUpsert, HabitRecordOut, HabitRecordUpsert
+from app.services.markdown_exporter import export_daily_markdown
+
+router = APIRouter(prefix="/api/logs", tags=["DailyLogs"])
+
+DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+MONTH_PATTERN = re.compile(r"^\d{4}-\d{2}$")
+
+
+def _validate_date(date_str: str) -> None:
+    """校验日期字符串必须为 YYYY-MM-DD 格式"""
+    if not DATE_PATTERN.match(date_str):
+        raise HTTPException(status_code=400, detail="日期格式必须为 YYYY-MM-DD")
+
+
+def _build_daily_log_response(date_str: str, md_path: str, md_content: str) -> DailyLogOut:
+    """组装某日完整复盘响应（含打卡详情与最新 Markdown 文本）"""
+    with db_cursor() as cur:
+        cur.execute("SELECT * FROM daily_logs WHERE date = ?;", (date_str,))
+        log_row = cur.fetchone()
+        cur.execute(
+            """
+            SELECT
+                hr.habit_id,
+                h.title AS habit_title,
+                h.category AS category,
+                hr.status,
+                hr.note,
+                hr.recorded_at
+            FROM habit_records hr
+            JOIN habits h ON h.id = hr.habit_id
+            WHERE hr.date = ?
+            ORDER BY hr.habit_id ASC;
+            """,
+            (date_str,),
+        )
+        record_rows = cur.fetchall()
+
+    return DailyLogOut(
+        date=date_str,
+        summary=log_row["summary"] if log_row else "",
+        mood_score=log_row["mood_score"] if log_row else None,
+        energy_score=log_row["energy_score"] if log_row else None,
+        highlights=json.loads(log_row["highlights"] or "[]") if log_row else [],
+        md_path=md_path,
+        updated_at=log_row["updated_at"] if log_row else "",
+        habit_records=[
+            HabitRecordOut(
+                habit_id=r["habit_id"],
+                habit_title=r["habit_title"],
+                category=r["category"],
+                status=r["status"],
+                note=r["note"],
+                recorded_at=r["recorded_at"],
+            )
+            for r in record_rows
+        ],
+        markdown_content=md_content,
+    )
+
+
+@router.get("")
+def list_monthly_logs(
+    month: str = Query(..., description="月份，格式 YYYY-MM，例如 2026-11"),
+):
+    """获取指定月份的每日复盘概览与习惯完成热力图数据"""
+    if not MONTH_PATTERN.match(month):
+        raise HTTPException(status_code=400, detail="月份格式必须为 YYYY-MM")
+
+    like_prefix = f"{month}-%"
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT date, summary, mood_score, energy_score, highlights, md_path, updated_at
+            FROM daily_logs
+            WHERE date LIKE ?
+            ORDER BY date ASC;
+            """,
+            (like_prefix,),
+        )
+        log_rows = cur.fetchall()
+
+        cur.execute(
+            """
+            SELECT date,
+                   SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_count,
+                   COUNT(*) AS recorded_count
+            FROM habit_records
+            WHERE date LIKE ?
+            GROUP BY date;
+            """,
+            (like_prefix,),
+        )
+        stat_map = {r["date"]: dict(r) for r in cur.fetchall()}
+
+    items = []
+    for row in log_rows:
+        date_str = row["date"]
+        stats = stat_map.get(date_str, {"done_count": 0, "recorded_count": 0})
+        items.append(
+            {
+                "date": date_str,
+                "summary": row["summary"],
+                "mood_score": row["mood_score"],
+                "energy_score": row["energy_score"],
+                "highlights": json.loads(row["highlights"] or "[]"),
+                "done_count": stats["done_count"],
+                "recorded_count": stats["recorded_count"],
+                "md_path": row["md_path"],
+                "updated_at": row["updated_at"],
+            }
+        )
+    return {"month": month, "days": items}
+
+
+@router.get("/{date_str}", response_model=DailyLogOut)
+def get_daily_log(date_str: str):
+    """获取某日完整复盘记录，并确保对应 Markdown 日记文件已同步"""
+    _validate_date(date_str)
+    md_path, md_content = export_daily_markdown(date_str)
+    return _build_daily_log_response(date_str, md_path, md_content)
+
+
+@router.put("/{date_str}", response_model=DailyLogOut)
+def upsert_daily_log(date_str: str, payload: DailyLogUpsert):
+    """创建或更新某日的复盘摘要、情绪/精力评分及「每日小确幸」，并自动导出 Markdown"""
+    _validate_date(date_str)
+    now_iso = datetime.now().isoformat(timespec="seconds")
+
+    with db_cursor() as cur:
+        cur.execute("SELECT * FROM daily_logs WHERE date = ?;", (date_str,))
+        existing = cur.fetchone()
+
+        if existing is None:
+            summary = payload.summary if payload.summary is not None else ""
+            mood_score = payload.mood_score
+            energy_score = payload.energy_score
+            highlights = payload.highlights if payload.highlights is not None else []
+            cur.execute(
+                """
+                INSERT INTO daily_logs (date, summary, mood_score, energy_score, highlights, md_path, updated_at)
+                VALUES (?, ?, ?, ?, ?, '', ?);
+                """,
+                (
+                    date_str,
+                    summary,
+                    mood_score,
+                    energy_score,
+                    json.dumps(highlights, ensure_ascii=False),
+                    now_iso,
+                ),
+            )
+        else:
+            summary = payload.summary if payload.summary is not None else existing["summary"]
+            mood_score = payload.mood_score if payload.mood_score is not None else existing["mood_score"]
+            energy_score = payload.energy_score if payload.energy_score is not None else existing["energy_score"]
+            highlights = (
+                payload.highlights
+                if payload.highlights is not None
+                else json.loads(existing["highlights"] or "[]")
+            )
+            cur.execute(
+                """
+                UPDATE daily_logs
+                SET summary = ?, mood_score = ?, energy_score = ?, highlights = ?, updated_at = ?
+                WHERE date = ?;
+                """,
+                (
+                    summary,
+                    mood_score,
+                    energy_score,
+                    json.dumps(highlights, ensure_ascii=False),
+                    now_iso,
+                    date_str,
+                ),
+            )
+
+    md_path, md_content = export_daily_markdown(date_str)
+    return _build_daily_log_response(date_str, md_path, md_content)
+
+
+@router.post("/{date_str}/habits", response_model=DailyLogOut)
+def record_daily_habit(date_str: str, payload: HabitRecordUpsert):
+    """记录或更新某日某项习惯的完成状态（UPSERT），并自动刷新当日 Markdown 日记"""
+    _validate_date(date_str)
+    now_iso = datetime.now().isoformat(timespec="seconds")
+
+    with db_cursor() as cur:
+        # 先确认习惯存在
+        cur.execute("SELECT id FROM habits WHERE id = ?;", (payload.habit_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="找不到对应的习惯项")
+
+        # 若当日已有记录则更新，否则插入（支持白天静默记录 + 晚间复盘核对修正）
+        cur.execute(
+            """
+            INSERT INTO habit_records (date, habit_id, status, note, recorded_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(date, habit_id) DO UPDATE SET
+                status = excluded.status,
+                note = excluded.note,
+                recorded_at = excluded.recorded_at;
+            """,
+            (date_str, payload.habit_id, payload.status, payload.note, now_iso),
+        )
+
+    md_path, md_content = export_daily_markdown(date_str)
+    return _build_daily_log_response(date_str, md_path, md_content)
