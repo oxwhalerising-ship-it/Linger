@@ -83,12 +83,12 @@ def ensure_data_dirs() -> None:
 
 
 def get_connection() -> sqlite3.Connection:
-    """创建一个开启外键与字典行访问的 SQLite 连接"""
-    ensure_data_dirs()
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    """创建一个开启外键、忙等待超时与字典行访问的 SQLite 连接"""
+    conn = sqlite3.connect(DB_PATH, timeout=5.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA busy_timeout = 5000;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
     return conn
 
 
@@ -113,6 +113,8 @@ def init_db() -> None:
     now_iso = datetime.now().isoformat(timespec="seconds")
 
     with db_cursor() as cur:
+        # 仅在初始化时开启 WAL 模式，避免每次打开连接都获取写锁
+        cur.execute("PRAGMA journal_mode = WAL;")
         # 1. 系统与人设配置表
         cur.execute(
             """
@@ -238,6 +240,26 @@ def init_db() -> None:
                 md_path TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             );
+            """
+        )
+
+        # 补齐常用查询索引，避免全表扫描
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_habit_records_date
+            ON habit_records (date, habit_id);
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_memories_resolved_type
+            ON memories (is_resolved, memory_type, id);
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_reports_period_id
+            ON reports (period_type, id);
             """
         )
 

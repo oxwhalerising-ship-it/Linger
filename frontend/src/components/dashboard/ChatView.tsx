@@ -547,20 +547,31 @@ export default function ChatView({
     window.taiwanBotEnv?.notifyVoiceCallOwner?.("none");
   }, []);
 
+  // 每次通话会话生成唯一前缀，防止多次通话 turnId 重置产生重复 React key 与标签误覆盖
+  const voiceCallSessionSaltRef = useRef<number>(Date.now());
+  const prevVoiceCallOpenRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (voiceCallOpen && !prevVoiceCallOpenRef.current) {
+      voiceCallSessionSaltRef.current = Date.now();
+    }
+    prevVoiceCallOpenRef.current = voiceCallOpen;
+  }, [voiceCallOpen]);
+
   /** 通话每结束一轮，即时同步到当前聊天消息流，挂断后无缝保留完整记录 */
   const handleVoiceTurnCommitted = useCallback((turn: CommittedVoiceTurn) => {
+    const salt = voiceCallSessionSaltRef.current;
     const timeStr = new Date(turn.timestampMs).toTimeString().slice(0, 5);
     setMessages((prev) => [
       ...prev,
       {
-        id: `vc-u-${turn.turnId}-${turn.timestampMs}`,
+        id: `vc-u-${salt}-${turn.turnId}-${turn.timestampMs}`,
         role: "user",
         content: turn.userText,
         time: timeStr,
         createdAtMs: turn.timestampMs,
       },
       {
-        id: `vc-a-${turn.turnId}`,
+        id: `vc-a-${salt}-${turn.turnId}`,
         role: "assistant",
         content: turn.assistantReply,
         sentences: splitSentencesForSpeech(turn.assistantReply),
@@ -579,10 +590,11 @@ export default function ChatView({
       tags: string[];
       pendingHabits: Array<{ id: number; title: string; category: string }>;
     }) => {
+      const targetId = `vc-a-${voiceCallSessionSaltRef.current}-${payload.turnId}`;
       if (payload.tags.length > 0) {
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === `vc-a-${payload.turnId}` ? { ...m, tags: payload.tags } : m,
+            m.id === targetId ? { ...m, tags: payload.tags } : m,
           ),
         );
       }

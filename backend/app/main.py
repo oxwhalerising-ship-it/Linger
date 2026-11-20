@@ -23,11 +23,12 @@ async def lifespan(_app: FastAPI):
     """FastAPI 生命周期钩子：初始化 SQLite、启动全天作息定时管家与本地唤醒监听，退出时优雅停止"""
     init_db()
     start_scheduler()
-    wakeword_engine.start_if_enabled(asyncio.get_running_loop())
+    loop = asyncio.get_running_loop()
+    await asyncio.to_thread(wakeword_engine.start_if_enabled, loop)
     try:
         yield
     finally:
-        wakeword_engine.stop()
+        await asyncio.to_thread(wakeword_engine.stop)
         shutdown_scheduler()
         await FishAudioTTSProvider.close_session()
 
@@ -36,11 +37,12 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="TaiwanBot 本地小管家后端",
     description="台湾腔治愈系自我管理桌面小精灵的本地 API 服务",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
 # 配置跨域（CORS），允许 Electron 开发期 Vite 页面（localhost:5173）和打包后的本地页面访问后端
+# 本服务不使用 Cookie 鉴权，关闭 allow_credentials 以降低本地 Origin: null 风险
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -48,7 +50,7 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "null",  # Electron 加载本地 file:// 协议时的 Origin
     ],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

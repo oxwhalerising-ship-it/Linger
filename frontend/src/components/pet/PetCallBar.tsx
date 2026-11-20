@@ -103,14 +103,25 @@ export default function PetCallBar({
     });
   }, []);
 
-  // 通话时长计时器
+  const isCallActive = callState !== "error" && callState !== "ended";
+  const bargeInRef = useRef(bargeInEnabled);
+  const manualCommitRef = useRef(manualCommitMode);
+
   useEffect(() => {
-    if (callState === "error" || callState === "ended") return;
+    bargeInRef.current = bargeInEnabled;
+  }, [bargeInEnabled]);
+  useEffect(() => {
+    manualCommitRef.current = manualCommitMode;
+  }, [manualCommitMode]);
+
+  // 通话时长计时器（仅依赖通话是否进行中，避免每次状态切换重置秒表）
+  useEffect(() => {
+    if (!isCallActive) return;
     const timer = window.setInterval(() => {
       setElapsedSec((prev) => prev + 1);
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [callState]);
+  }, [isCallActive]);
 
   // 启动与销毁全双工实时通话引擎（严格防 React StrictMode 双挂载竞态）
   useEffect(() => {
@@ -250,9 +261,12 @@ export default function PetCallBar({
       await engine.start({
         mode: "normal",
         rate,
-        bargeInEnabled: true,
-        manualCommitMode: true,
+        bargeInEnabled: bargeInRef.current,
+        manualCommitMode: manualCommitRef.current,
       });
+      if (!cancelled && mutedRef.current) {
+        engine.setMuted(true);
+      }
     };
 
     void boot();
@@ -274,39 +288,35 @@ export default function PetCallBar({
   }, [emitVisual, sessionSeed]);
 
   const handleToggleMute = () => {
-    setMuted((prev) => {
-      const next = !prev;
-      mutedRef.current = next;
-      engineRef.current?.setMuted(next);
-      emitVisual();
-      return next;
-    });
+    const next = !mutedRef.current;
+    mutedRef.current = next;
+    setMuted(next);
+    engineRef.current?.setMuted(next);
+    emitVisual();
   };
 
   const handleToggleBargeIn = () => {
-    setBargeInEnabled((prev) => {
-      const next = !prev;
-      engineRef.current?.setBargeInEnabled(next);
-      setCaption(
-        next ? "随时插话已开启，开口就能打断灵儿" : "防回声模式：已关闭自动插话",
-      );
-      setCaptionRole("system");
-      return next;
-    });
+    const next = !bargeInRef.current;
+    bargeInRef.current = next;
+    setBargeInEnabled(next);
+    engineRef.current?.setBargeInEnabled(next);
+    setCaption(
+      next ? "随时插话已开启，开口就能打断灵儿" : "防回声模式：已关闭自动插话",
+    );
+    setCaptionRole("system");
   };
 
   const handleToggleManualCommit = () => {
-    setManualCommitMode((prev) => {
-      const next = !prev;
-      engineRef.current?.setManualCommitMode(next);
-      setCaption(
-        next
-          ? "手动发送模式：说完按空格或点「确认发送」"
-          : "自动停顿模式：说完停顿 1.4 秒自动发送",
-      );
-      setCaptionRole("system");
-      return next;
-    });
+    const next = !manualCommitRef.current;
+    manualCommitRef.current = next;
+    setManualCommitMode(next);
+    engineRef.current?.setManualCommitMode(next);
+    setCaption(
+      next
+        ? "手动发送模式：说完按空格或点「确认发送」"
+        : "自动停顿模式：说完停顿 1.4 秒自动发送",
+    );
+    setCaptionRole("system");
   };
 
   const handleInterruptOrCommit = useCallback(() => {

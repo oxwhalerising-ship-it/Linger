@@ -101,14 +101,49 @@ export default function VoiceCallOverlay({
     onArchiveUpdateRef.current = onArchiveUpdate;
   }, [onTurnCommitted, onArchiveUpdate]);
 
-  // 通话计时器
+  const isCallActive = callState !== "error" && callState !== "ended";
+  const noticeTimerRef = useRef<number | null>(null);
+  const bargeInRef = useRef(bargeInEnabled);
+  const manualCommitRef = useRef(manualCommitMode);
+  const mutedRef = useRef(muted);
+
   useEffect(() => {
-    if (callState === "error" || callState === "ended") return;
+    bargeInRef.current = bargeInEnabled;
+  }, [bargeInEnabled]);
+  useEffect(() => {
+    manualCommitRef.current = manualCommitMode;
+  }, [manualCommitMode]);
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
+
+  const showTransientNotice = useCallback((msg: string, ms = 2600) => {
+    setNotice(msg);
+    if (noticeTimerRef.current !== null) {
+      window.clearTimeout(noticeTimerRef.current);
+    }
+    noticeTimerRef.current = window.setTimeout(() => {
+      noticeTimerRef.current = null;
+      setNotice(null);
+    }, ms);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current !== null) {
+        window.clearTimeout(noticeTimerRef.current);
+      }
+    };
+  }, []);
+
+  // 通话计时器（仅依赖通话是否进行中，避免每次状态切换重置秒表）
+  useEffect(() => {
+    if (!isCallActive) return;
     const timer = window.setInterval(() => {
       setElapsedSec((prev) => prev + 1);
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [callState]);
+  }, [isCallActive]);
 
   // 字幕自动滚动到底部
   useEffect(() => {
@@ -262,12 +297,18 @@ export default function VoiceCallOverlay({
     });
 
     engineRef.current = engine;
-    void engine.start({
-      mode: initialModeRef.current,
-      rate: initialRateRef.current,
-      bargeInEnabled: true,
-      manualCommitMode: true,
-    });
+    void engine
+      .start({
+        mode: initialModeRef.current,
+        rate: initialRateRef.current,
+        bargeInEnabled: bargeInRef.current,
+        manualCommitMode: manualCommitRef.current,
+      })
+      .then(() => {
+        if (!cancelled && mutedRef.current) {
+          engine.setMuted(true);
+        }
+      });
 
     return () => {
       cancelled = true;
@@ -285,40 +326,37 @@ export default function VoiceCallOverlay({
   }, [mode, voiceRate]);
 
   const handleToggleMute = useCallback(() => {
-    setMuted((prev) => {
-      const next = !prev;
-      engineRef.current?.setMuted(next);
-      return next;
-    });
+    const next = !mutedRef.current;
+    mutedRef.current = next;
+    setMuted(next);
+    engineRef.current?.setMuted(next);
   }, []);
 
   const handleToggleBargeIn = useCallback(() => {
-    setBargeInEnabled((prev) => {
-      const next = !prev;
-      engineRef.current?.setBargeInEnabled(next);
-      setNotice(
-        next
-          ? "已开启随时插话打断（说话时可直接开口打断灵儿）"
-          : "已关闭自动插话（适合外放防回声，可按空格键手动打断）",
-      );
-      window.setTimeout(() => setNotice(null), 2600);
-      return next;
-    });
-  }, []);
+    const next = !bargeInRef.current;
+    bargeInRef.current = next;
+    setBargeInEnabled(next);
+    engineRef.current?.setBargeInEnabled(next);
+    showTransientNotice(
+      next
+        ? "已开启随时插话打断（说话时可直接开口打断灵儿）"
+        : "已关闭自动插话（适合外放防回声，可按空格键手动打断）",
+      2600,
+    );
+  }, [showTransientNotice]);
 
   const handleToggleManualCommit = useCallback(() => {
-    setManualCommitMode((prev) => {
-      const next = !prev;
-      engineRef.current?.setManualCommitMode(next);
-      setNotice(
-        next
-          ? "已切换为「手动确认发送」：停顿思考不会被截断，说完按空格或点「确认发送」"
-          : "已切换为「自动停顿发送」：说完停顿 1.4 秒自动回应",
-      );
-      window.setTimeout(() => setNotice(null), 2800);
-      return next;
-    });
-  }, []);
+    const next = !manualCommitRef.current;
+    manualCommitRef.current = next;
+    setManualCommitMode(next);
+    engineRef.current?.setManualCommitMode(next);
+    showTransientNotice(
+      next
+        ? "已切换为「手动确认发送」：停顿思考不会被截断，说完按空格或点「确认发送」"
+        : "已切换为「自动停顿发送」：说完停顿 1.4 秒自动回应",
+      2800,
+    );
+  }, [showTransientNotice]);
 
   const handlePrimaryAction = useCallback(() => {
     engineRef.current?.manualInterruptOrCommit();

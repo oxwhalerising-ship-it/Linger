@@ -206,7 +206,19 @@ async def voice_call_websocket(websocket: WebSocket):
         background_tasks.add(task)
         task.add_done_callback(background_tasks.discard)
 
-    async def cancel_active_turn(spoken_text: str = "") -> None:
+    def _safe_turn_id(raw_val: Any, fallback: int) -> int:
+        try:
+            if raw_val is None or isinstance(raw_val, bool):
+                return fallback
+            return int(raw_val)
+        except (TypeError, ValueError):
+            return fallback
+
+    async def cancel_active_turn(
+        spoken_text: str = "",
+        *,
+        reason: str = "interrupted",
+    ) -> None:
         """立即中止正在进行的 LLM 流式生成与 TTS 合成任务，并在必要时保存已说出口的部分上下文"""
         nonlocal active_turn_task, active_turn_saved
         task = active_turn_task
@@ -221,11 +233,14 @@ async def voice_call_websocket(websocket: WebSocket):
             active_turn_saved = True
             partial = spoken_text.strip()
             today_str = datetime.now().strftime("%Y-%m-%d")
+            fallback_note = (
+                "（通话已挂断）" if reason in ("end_call", "disconnect") else "（被用户插话打断）"
+            )
             await asyncio.to_thread(
                 save_voice_call_messages,
                 today_str,
                 active_turn_user_text,
-                f"{partial}…" if partial else "（被用户插话打断）",
+                f"{partial}…" if partial else fallback_note,
                 None,
             )
 
@@ -554,7 +569,7 @@ async def voice_call_websocket(websocket: WebSocket):
                 wav_bytes = message["bytes"]
                 meta = pending_audio_meta or {}
                 pending_audio_meta = None
-                turn_id = int(meta.get("turn_id") or (active_turn_id + 1))
+                turn_id = _safe_turn_id(meta.get("turn_id"), active_turn_id + 1)
                 mode = str(meta.get("mode") or current_mode)
                 rate = meta.get("rate") or current_rate
 
@@ -577,6 +592,7 @@ async def voice_call_websocket(websocket: WebSocket):
             event_type = str(data.get("type") or "")
 
             if event_type == "start_call":
+                pending_audio_meta = None
                 current_mode = str(data.get("mode") or "normal")
                 current_rate = data.get("rate") or None
                 play_greeting = bool(data.get("play_greeting", True))
@@ -619,11 +635,18 @@ async def voice_call_websocket(websocket: WebSocket):
                 pending_audio_meta = data
 
             elif event_type == "audio_turn":
-                turn_id = int(data.get("turn_id") or (active_turn_id + 1))
+                pending_audio_meta = None
+                turn_id = _safe_turn_id(data.get("turn_id"), active_turn_id + 1)
                 mode = str(data.get("mode") or current_mode)
                 rate = data.get("rate") or current_rate
                 audio_b64 = str(data.get("audio_b64") or "")
-                wav_bytes = base64.b64decode(audio_b64) if audio_b64 else b""
+                try:
+                    wav_bytes = base64.b64decode(audio_b64) if audio_b64 else b""
+                except Exception:
+                    await safe_send(
+                        {"type": "error", "turn_id": turn_id, "detail": "音频 Base64 格式无效"}
+                    )
+                    continue
 
                 await cancel_active_turn()
                 active_turn_id = turn_id
@@ -632,7 +655,8 @@ async def voice_call_websocket(websocket: WebSocket):
                 )
 
             elif event_type == "text_turn":
-                turn_id = int(data.get("turn_id") or (active_turn_id + 1))
+                pending_audio_meta = None
+                turn_id = _safe_turn_id(data.get("turn_id"), active_turn_id + 1)
                 mode = str(data.get("mode") or current_mode)
                 rate = data.get("rate") or current_rate
                 text = str(data.get("text") or "").strip()
@@ -646,20 +670,22 @@ async def voice_call_websocket(websocket: WebSocket):
                 )
 
             elif event_type == "interrupt":
+                pending_audio_meta = None
                 spoken = str(data.get("spoken_text") or "")
-                interrupted_id = int(data.get("turn_id") or active_turn_id)
-                await cancel_active_turn(spoken_text=spoken)
+                interrupted_id = _safe_turn_id(data.get("turn_id"), active_turn_id)
+                await cancel_active_turn(spoken_text=spoken, reason="interrupted")
                 await safe_send({"type": "interrupted", "turn_id": interrupted_id})
 
             elif event_type == "ping":
                 await safe_send({"type": "pong"})
 
             elif event_type == "end_call":
-                await cancel_active_turn()
+                pending_audio_meta = None
+                await cancel_active_turn(reason="end_call")
                 break
 
     except WebSocketDisconnect:
         pass
     finally:
         ws_closed = True
-        await cancel_active_turn()
+        await cancel_active_turn(reason="disconnect")

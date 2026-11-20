@@ -105,11 +105,12 @@ def _get_today_habit_summary() -> tuple[int, int]:
 def _compose_nudge_payload(
     event_type: ScheduleEventType,
     is_snoozed: bool = False,
+    snooze_minutes: int = 15,
 ) -> dict[str, Any]:
     """根据节点类型组装台湾腔主动关怀事件载荷"""
     total_habits, done_habits = _get_today_habit_summary()
     pending_count = max(total_habits - done_habits, 0)
-    prefix = "欸～15 分钟到啰，我又轻轻探头来找你啦！" if is_snoozed else ""
+    prefix = f"欸～{snooze_minutes} 分钟到啰，我又轻轻探头来找你啦！" if is_snoozed else ""
 
     if event_type == "morning_plan":
         emotion = "happy"
@@ -157,6 +158,7 @@ async def trigger_proactive_event(
     *,
     force: bool = False,
     is_snoozed: bool = False,
+    snooze_minutes: int = 15,
 ) -> dict[str, Any]:
     """
     触发一次主动陪伴推送：
@@ -171,7 +173,11 @@ async def trigger_proactive_event(
             "event_type": event_type,
         }
 
-    payload = _compose_nudge_payload(event_type, is_snoozed=is_snoozed)
+    payload = _compose_nudge_payload(
+        event_type,
+        is_snoozed=is_snoozed,
+        snooze_minutes=snooze_minutes,
+    )
     delivered = await event_bus.broadcast(payload)
     return {
         "sent": True,
@@ -279,14 +285,20 @@ def snooze_proactive_event(
 ) -> dict[str, Any]:
     """安排一次“稍后再聊（默认 15 分钟后）”的延后提醒"""
     global _scheduler
-    run_at = datetime.now() + timedelta(minutes=max(1, min(delay_minutes, 180)))
+    actual_delay = max(1, min(delay_minutes, 180))
+    run_at = datetime.now() + timedelta(minutes=actual_delay)
     job_id = f"snooze_{event_type}_{int(run_at.timestamp())}"
 
     if _scheduler is not None:
         _scheduler.add_job(
             trigger_proactive_event,
             trigger=DateTrigger(run_date=run_at),
-            kwargs={"event_type": event_type, "force": False, "is_snoozed": True},
+            kwargs={
+                "event_type": event_type,
+                "force": False,
+                "is_snoozed": True,
+                "snooze_minutes": actual_delay,
+            },
             id=job_id,
             name=f"稍后再聊（{event_type}）",
             replace_existing=True,
@@ -296,7 +308,7 @@ def snooze_proactive_event(
         "snoozed": True,
         "job_id": job_id,
         "event_type": event_type,
-        "delay_minutes": delay_minutes,
+        "delay_minutes": actual_delay,
         "resume_at": run_at.isoformat(timespec="seconds"),
     }
 

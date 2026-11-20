@@ -306,7 +306,11 @@ def _apply_extracted_updates(date_str: str, extracted: dict[str, Any]) -> dict[s
             habit_id = item.get("habit_id")
             status = item.get("status")
             note = str(item.get("note") or "")[:300]
-            if not isinstance(habit_id, int) or status not in ("done", "partial", "missed"):
+            if (
+                not isinstance(habit_id, int)
+                or isinstance(habit_id, bool)
+                or status not in ("done", "partial", "missed")
+            ):
                 continue
             cur.execute("SELECT id, title FROM habits WHERE id = ?;", (habit_id,))
             h_row = cur.fetchone()
@@ -330,9 +334,9 @@ def _apply_extracted_updates(date_str: str, extracted: dict[str, Any]) -> dict[s
         # 2. 更新每日复盘主表（情绪/精力评分、小确幸追加、摘要追加）
         mood_score = extracted.get("mood_score")
         energy_score = extracted.get("energy_score")
-        if not (isinstance(mood_score, int) and 1 <= mood_score <= 5):
+        if not (isinstance(mood_score, int) and not isinstance(mood_score, bool) and 1 <= mood_score <= 5):
             mood_score = None
-        if not (isinstance(energy_score, int) and 1 <= energy_score <= 5):
+        if not (isinstance(energy_score, int) and not isinstance(energy_score, bool) and 1 <= energy_score <= 5):
             energy_score = None
 
         summary_append = str(extracted.get("daily_summary_append") or "").strip()
@@ -343,60 +347,52 @@ def _apply_extracted_updates(date_str: str, extracted: dict[str, Any]) -> dict[s
         ]
 
         if any([mood_score is not None, energy_score is not None, summary_append, new_highlights]):
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO daily_logs
+                    (date, summary, mood_score, energy_score, highlights, md_path, updated_at)
+                VALUES (?, '', NULL, NULL, '[]', '', ?);
+                """,
+                (date_str, now_iso),
+            )
             cur.execute("SELECT * FROM daily_logs WHERE date = ?;", (date_str,))
             existing = cur.fetchone()
-            if existing is None:
-                merged_summary = summary_append
-                merged_highlights = new_highlights
-                cur.execute(
-                    """
-                    INSERT INTO daily_logs (date, summary, mood_score, energy_score, highlights, md_path, updated_at)
-                    VALUES (?, ?, ?, ?, ?, '', ?);
-                    """,
-                    (
-                        date_str,
-                        merged_summary,
-                        mood_score,
-                        energy_score,
-                        json.dumps(merged_highlights, ensure_ascii=False),
-                        now_iso,
-                    ),
-                )
-            else:
-                old_summary = (existing["summary"] or "").strip()
-                merged_summary = (
-                    f"{old_summary}\n{summary_append}".strip()
-                    if summary_append and summary_append not in old_summary
-                    else old_summary
-                )
-                old_highlights = json.loads(existing["highlights"] or "[]")
-                merged_highlights = list(old_highlights)
-                for hl in new_highlights:
-                    if hl not in merged_highlights:
-                        merged_highlights.append(hl)
+            old_summary = (existing["summary"] or "").strip() if existing else ""
+            merged_summary = (
+                f"{old_summary}\n{summary_append}".strip()
+                if summary_append and summary_append not in old_summary
+                else old_summary
+            )
+            old_highlights = json.loads(existing["highlights"] or "[]") if existing else []
+            merged_highlights = list(old_highlights)
+            actually_added_highlights: list[str] = []
+            for hl in new_highlights:
+                if hl not in merged_highlights:
+                    merged_highlights.append(hl)
+                    actually_added_highlights.append(hl)
 
-                cur.execute(
-                    """
-                    UPDATE daily_logs
-                    SET summary = ?,
-                        mood_score = COALESCE(?, mood_score),
-                        energy_score = COALESCE(?, energy_score),
-                        highlights = ?,
-                        updated_at = ?
-                    WHERE date = ?;
-                    """,
-                    (
-                        merged_summary,
-                        mood_score,
-                        energy_score,
-                        json.dumps(merged_highlights, ensure_ascii=False),
-                        now_iso,
-                        date_str,
-                    ),
-                )
+            cur.execute(
+                """
+                UPDATE daily_logs
+                SET summary = ?,
+                    mood_score = COALESCE(?, mood_score),
+                    energy_score = COALESCE(?, energy_score),
+                    highlights = ?,
+                    updated_at = ?
+                WHERE date = ?;
+                """,
+                (
+                    merged_summary,
+                    mood_score,
+                    energy_score,
+                    json.dumps(merged_highlights, ensure_ascii=False),
+                    now_iso,
+                    date_str,
+                ),
+            )
             applied["mood_score"] = mood_score
             applied["energy_score"] = energy_score
-            applied["new_highlights"] = new_highlights
+            applied["new_highlights"] = actually_added_highlights
 
         # 3. 写入新提取的长期记忆 / 历史高光
         for mem in extracted.get("new_memories") or []:

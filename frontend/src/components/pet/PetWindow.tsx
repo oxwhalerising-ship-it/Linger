@@ -682,9 +682,10 @@ export default function PetWindow() {
       const res = await sendQuickChat(text, "normal");
       setSending(false);
 
-      if (!dndEnabled && res.sentences.length > 0) {
+      const isDnd = dndRef.current;
+      if (!isDnd && res.sentences.length > 0) {
         void playTaiwanSentences(res.sentences, {
-          muted: dndEnabled,
+          muted: isDnd,
           signal: controller.signal,
           onStartSpeaking: () => triggerEmotion("speaking", 0),
           onFinishSpeaking: () => triggerEmotion(res.emotion || "happy", 5000),

@@ -12,18 +12,25 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.database import db_cursor
 from app.schemas import DailyLogOut, DailyLogUpsert, HabitRecordOut, HabitRecordUpsert
-from app.services.markdown_exporter import export_daily_markdown
+from app.services.markdown_exporter import export_daily_markdown, render_daily_markdown
 
 router = APIRouter(prefix="/api/logs", tags=["DailyLogs"])
 
-DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-MONTH_PATTERN = re.compile(r"^\d{4}-\d{2}$")
+
+def _validate_date(date_str: str) -> str:
+    """严格校验日期字符串必须为合法公历 YYYY-MM-DD"""
+    try:
+        return datetime.strptime(date_str.strip(), "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="日期格式必须为合法的 YYYY-MM-DD") from exc
 
 
-def _validate_date(date_str: str) -> None:
-    """校验日期字符串必须为 YYYY-MM-DD 格式"""
-    if not DATE_PATTERN.match(date_str):
-        raise HTTPException(status_code=400, detail="日期格式必须为 YYYY-MM-DD")
+def _validate_month(month_str: str) -> str:
+    """严格校验月份字符串必须为合法 YYYY-MM"""
+    try:
+        return datetime.strptime(month_str.strip(), "%Y-%m").strftime("%Y-%m")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="月份格式必须为合法的 YYYY-MM") from exc
 
 
 def _build_daily_log_response(date_str: str, md_path: str, md_content: str) -> DailyLogOut:
@@ -77,8 +84,7 @@ def list_monthly_logs(
     month: str = Query(..., description="月份，格式 YYYY-MM，例如 2026-11"),
 ):
     """获取指定月份的每日复盘概览与习惯完成热力图数据"""
-    if not MONTH_PATTERN.match(month):
-        raise HTTPException(status_code=400, detail="月份格式必须为 YYYY-MM")
+    month = _validate_month(month)
 
     like_prefix = f"{month}-%"
     with db_cursor() as cur:
@@ -128,74 +134,62 @@ def list_monthly_logs(
 
 @router.get("/{date_str}", response_model=DailyLogOut)
 def get_daily_log(date_str: str):
-    """获取某日完整复盘记录，并确保对应 Markdown 日记文件已同步"""
-    _validate_date(date_str)
-    md_path, md_content = export_daily_markdown(date_str)
-    return _build_daily_log_response(date_str, md_path, md_content)
+    """只读获取某日完整复盘记录与 Markdown 预览（不污染数据库或磁盘）"""
+    canonical = _validate_date(date_str)
+    md_path, md_content = render_daily_markdown(canonical)
+    return _build_daily_log_response(canonical, md_path, md_content)
 
 
 @router.put("/{date_str}", response_model=DailyLogOut)
 def upsert_daily_log(date_str: str, payload: DailyLogUpsert):
     """创建或更新某日的复盘摘要、情绪/精力评分及「每日小确幸」，并自动导出 Markdown"""
-    _validate_date(date_str)
+    canonical = _validate_date(date_str)
     now_iso = datetime.now().isoformat(timespec="seconds")
 
     with db_cursor() as cur:
-        cur.execute("SELECT * FROM daily_logs WHERE date = ?;", (date_str,))
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO daily_logs
+                (date, summary, mood_score, energy_score, highlights, md_path, updated_at)
+            VALUES (?, '', NULL, NULL, '[]', '', ?);
+            """,
+            (canonical, now_iso),
+        )
+        cur.execute("SELECT * FROM daily_logs WHERE date = ?;", (canonical,))
         existing = cur.fetchone()
 
-        if existing is None:
-            summary = payload.summary if payload.summary is not None else ""
-            mood_score = payload.mood_score
-            energy_score = payload.energy_score
-            highlights = payload.highlights if payload.highlights is not None else []
-            cur.execute(
-                """
-                INSERT INTO daily_logs (date, summary, mood_score, energy_score, highlights, md_path, updated_at)
-                VALUES (?, ?, ?, ?, ?, '', ?);
-                """,
-                (
-                    date_str,
-                    summary,
-                    mood_score,
-                    energy_score,
-                    json.dumps(highlights, ensure_ascii=False),
-                    now_iso,
-                ),
-            )
-        else:
-            summary = payload.summary if payload.summary is not None else existing["summary"]
-            mood_score = payload.mood_score if payload.mood_score is not None else existing["mood_score"]
-            energy_score = payload.energy_score if payload.energy_score is not None else existing["energy_score"]
-            highlights = (
-                payload.highlights
-                if payload.highlights is not None
-                else json.loads(existing["highlights"] or "[]")
-            )
-            cur.execute(
-                """
-                UPDATE daily_logs
-                SET summary = ?, mood_score = ?, energy_score = ?, highlights = ?, updated_at = ?
-                WHERE date = ?;
-                """,
-                (
-                    summary,
-                    mood_score,
-                    energy_score,
-                    json.dumps(highlights, ensure_ascii=False),
-                    now_iso,
-                    date_str,
-                ),
-            )
+        summary = payload.summary if payload.summary is not None else existing["summary"]
+        mood_score = payload.mood_score if payload.mood_score is not None else existing["mood_score"]
+        energy_score = payload.energy_score if payload.energy_score is not None else existing["energy_score"]
+        highlights = (
+            payload.highlights
+            if payload.highlights is not None
+            else json.loads(existing["highlights"] or "[]")
+        )
+        cur.execute(
+            """
+            UPDATE daily_logs
+            SET summary = ?, mood_score = ?, energy_score = ?, highlights = ?, updated_at = ?
+            WHERE date = ?;
+            """,
+            (
+                summary,
+                mood_score,
+                energy_score,
+                json.dumps(highlights, ensure_ascii=False),
+                now_iso,
+                canonical,
+            ),
+        )
 
-    md_path, md_content = export_daily_markdown(date_str)
-    return _build_daily_log_response(date_str, md_path, md_content)
+    md_path, md_content = export_daily_markdown(canonical)
+    return _build_daily_log_response(canonical, md_path, md_content)
 
 
 @router.post("/{date_str}/habits", response_model=DailyLogOut)
 def record_daily_habit(date_str: str, payload: HabitRecordUpsert):
     """记录或更新某日某项习惯的完成状态（UPSERT），并自动刷新当日 Markdown 日记"""
-    _validate_date(date_str)
+    canonical = _validate_date(date_str)
     now_iso = datetime.now().isoformat(timespec="seconds")
 
     with db_cursor() as cur:
@@ -214,8 +208,8 @@ def record_daily_habit(date_str: str, payload: HabitRecordUpsert):
                 note = excluded.note,
                 recorded_at = excluded.recorded_at;
             """,
-            (date_str, payload.habit_id, payload.status, payload.note, now_iso),
+            (canonical, payload.habit_id, payload.status, payload.note, now_iso),
         )
 
-    md_path, md_content = export_daily_markdown(date_str)
-    return _build_daily_log_response(date_str, md_path, md_content)
+    md_path, md_content = export_daily_markdown(canonical)
+    return _build_daily_log_response(canonical, md_path, md_content)

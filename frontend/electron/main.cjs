@@ -313,6 +313,9 @@ while ($true) {
   Start-Sleep -Milliseconds 30
 }
 `;
+  if (!Number.isSafeInteger(hwnd) || hwnd <= 0) {
+    return;
+  }
   try {
     const proc = spawn(
       "powershell.exe",
@@ -320,6 +323,11 @@ while ($true) {
       { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
     );
     externalWindowTrackProc = proc;
+    proc.on("error", () => {
+      if (externalWindowTrackProc === proc) {
+        externalWindowTrackProc = null;
+      }
+    });
     let buf = "";
     proc.stdout.on("data", (chunk) => {
       if (externalWindowTrackProc !== proc) return;
@@ -1113,12 +1121,14 @@ function createPetWindow() {
     lockPetWindowZoom();
   });
   petWindow.webContents.on("did-finish-load", () => {
+    if (!petWindow || petWindow.isDestroyed()) return;
     lockPetWindowZoom();
     const bounds = petWindow.getBounds();
     const { width: targetW, height: targetH } =
       getPetDimensionsForMode(petWindowMode);
     applyPetWindowBounds(bounds.x, bounds.y, targetW, targetH);
     tryAttachPetToDashboardIfInside();
+    sendToPet("pet:dnd-changed", isDndEnabled);
   });
 
   loadWindowPage(petWindow, "pet");
@@ -1127,8 +1137,17 @@ function createPetWindow() {
     stopPetDragLoop();
   });
 
+  petWindow.on("hide", () => {
+    stopPetDragLoop();
+    stopPetSlideAnim();
+    stopExternalWindowTracker();
+  });
+
   petWindow.on("closed", () => {
     stopPetDragLoop();
+    stopPetSlideAnim();
+    stopExternalWindowTracker();
+    clearPetDockState(false);
     petWindowMode = "compact";
     if (activeVoiceCallOwner === "pet") {
       activeVoiceCallOwner = "none";
@@ -1484,9 +1503,30 @@ function setupIpcHandlers() {
   });
 
   // 2.6 双窗口实时语音通话互斥锁（避免主控面板与桌宠同时抢占麦克风与音频输出）
-  ipcMain.on("voice-call:notify-owner", (_event, owner) => {
+  ipcMain.on("voice-call:notify-owner", (event, owner) => {
     const normalized =
       owner === "pet" || owner === "dashboard" ? owner : "none";
+    const senderIsPet = Boolean(
+      petWindow && !petWindow.isDestroyed() && event.sender === petWindow.webContents,
+    );
+    const senderIsDashboard = Boolean(
+      dashboardWindow &&
+        !dashboardWindow.isDestroyed() &&
+        event.sender === dashboardWindow.webContents,
+    );
+
+    if (normalized === "none") {
+      // 仅允许当前持有通话权的窗口释放归属权，避免被强停的旧窗口回写覆盖新持有者
+      if (
+        (activeVoiceCallOwner === "pet" && senderIsPet) ||
+        (activeVoiceCallOwner === "dashboard" && senderIsDashboard)
+      ) {
+        activeVoiceCallOwner = "none";
+        refreshTrayMenu();
+      }
+      return;
+    }
+
     if (normalized === "pet" && activeVoiceCallOwner === "dashboard") {
       sendToDashboard("voice-call:force-stop");
     } else if (normalized === "dashboard" && activeVoiceCallOwner === "pet") {
@@ -1547,6 +1587,9 @@ function setupIpcHandlers() {
 
   ipcMain.handle("app:set-autostart", (_event, enabled) => {
     try {
+      if (!app.isPackaged) {
+        return false;
+      }
       app.setLoginItemSettings({ openAtLogin: Boolean(enabled) });
       return Boolean(app.getLoginItemSettings().openAtLogin);
     } catch {

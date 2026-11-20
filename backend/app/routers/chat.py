@@ -49,13 +49,16 @@ def _row_to_message_dict(row) -> dict:
 @router.post("")
 def chat_with_bot(payload: ChatRequest):
     """与台湾腔小管家对话，并自动触发静默归档与 Markdown 更新"""
+    validated_date = _validate_date_str(payload.date) if payload.date else None
     try:
         return run_agent_chat(
             user_message=payload.message,
-            date_str=payload.date,
+            date_str=validated_date,
             mode=payload.mode,
             trigger_type=payload.trigger_type,
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"对话大脑调用失败：{exc}") from exc
 
@@ -113,21 +116,25 @@ def get_messages_summary():
         cur.execute(
             """
             SELECT
-                m.session_date AS date,
-                COUNT(*) AS total_count,
-                SUM(CASE WHEN m.channel = 'text' THEN 1 ELSE 0 END) AS text_count,
-                SUM(CASE WHEN m.channel = 'voice' THEN 1 ELSE 0 END) AS voice_count,
-                MAX(m.created_at) AS last_at,
-                (
-                    SELECT m2.content
-                    FROM messages m2
-                    WHERE m2.session_date = m.session_date
-                    ORDER BY m2.id DESC
-                    LIMIT 1
-                ) AS last_preview
-            FROM messages m
-            GROUP BY m.session_date
-            ORDER BY m.session_date DESC;
+                agg.session_date AS date,
+                agg.total_count,
+                agg.text_count,
+                agg.voice_count,
+                agg.last_at,
+                latest.content AS last_preview
+            FROM (
+                SELECT
+                    session_date,
+                    COUNT(*) AS total_count,
+                    SUM(CASE WHEN channel = 'text' THEN 1 ELSE 0 END) AS text_count,
+                    SUM(CASE WHEN channel = 'voice' THEN 1 ELSE 0 END) AS voice_count,
+                    MAX(created_at) AS last_at,
+                    MAX(id) AS last_id
+                FROM messages
+                GROUP BY session_date
+            ) agg
+            LEFT JOIN messages latest ON latest.id = agg.last_id
+            ORDER BY agg.session_date DESC;
             """
         )
         dates = [
@@ -169,8 +176,14 @@ def list_messages(
         clauses.append("role = ?")
         params.append(role)
     if q and q.strip():
-        clauses.append("LOWER(content) LIKE LOWER(?)")
-        params.append(f"%{q.strip()}%")
+        escaped_q = (
+            q.strip()
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        clauses.append("LOWER(content) LIKE LOWER(?) ESCAPE '\\'")
+        params.append(f"%{escaped_q}%")
 
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     order_sql = "ASC" if order == "asc" else "DESC"
@@ -211,7 +224,15 @@ def create_message(payload: MessageCreate):
         else datetime.now().strftime(_DATE_FORMAT)
     )
     now_time = datetime.now().strftime("%H:%M:%S")
-    created_at = (payload.created_at or "").strip() or f"{target_date}T{now_time}"
+    raw_created_at = (payload.created_at or "").strip()
+    if raw_created_at:
+        try:
+            datetime.fromisoformat(raw_created_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="created_at 须为合法 ISO 时间格式") from exc
+        created_at = raw_created_at
+    else:
+        created_at = f"{target_date}T{now_time}"
     trigger_type = "voice_call" if payload.channel == "voice" else "manual"
     cleaned_content = payload.content.strip()
     if not cleaned_content:
@@ -311,7 +332,7 @@ def batch_delete_messages(payload: MessageBatchDeleteRequest):
     """批量删除历史消息（按选中 ID 列表，或按指定日期/渠道范围一键清理）"""
     with db_cursor() as cur:
         if payload.ids:
-            clean_ids = [int(i) for i in payload.ids if isinstance(i, int)]
+            clean_ids = [int(i) for i in payload.ids if isinstance(i, int) and not isinstance(i, bool)]
             if not clean_ids:
                 raise HTTPException(status_code=400, detail="未提供有效的消息 ID")
             placeholders = ",".join("?" for _ in clean_ids)

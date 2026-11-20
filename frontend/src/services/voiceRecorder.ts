@@ -82,10 +82,13 @@ export interface RecorderCallbacks {
 export class LocalWavRecorder {
   private stream: MediaStream | null = null;
   private audioCtx: AudioContext | null = null;
+  private sourceNode: MediaStreamAudioSourceNode | null = null;
   private processor: ScriptProcessorNode | null = null;
+  private silentGain: GainNode | null = null;
   private chunks: Float32Array[] = [];
   private isRecording = false;
   private sampleRate = 48000;
+  private startGeneration = 0;
 
   // VAD 能量检测参数
   private vadEnabled = false;
@@ -97,13 +100,14 @@ export class LocalWavRecorder {
     options: { vadEnabled?: boolean } & RecorderCallbacks = {},
   ): Promise<void> {
     if (this.isRecording) return;
+    const myGen = ++this.startGeneration;
     this.vadEnabled = Boolean(options.vadEnabled);
     this.callbacks = options;
     this.chunks = [];
     this.speechDetected = false;
     this.silenceStartTime = 0;
 
-    this.stream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
@@ -111,10 +115,30 @@ export class LocalWavRecorder {
       },
     });
 
+    // 若在等待麦克风授权期间外部调用了 stop()，立即释放流，避免麦克风泄漏
+    if (myGen !== this.startGeneration) {
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+
+    this.stream = stream;
     this.audioCtx = new AudioContext();
+    if (this.audioCtx.state === "suspended") {
+      await this.audioCtx.resume();
+    }
+    if (myGen !== this.startGeneration) {
+      void this.audioCtx.close();
+      this.audioCtx = null;
+      this.stream.getTracks().forEach((t) => t.stop());
+      this.stream = null;
+      return;
+    }
+
     this.sampleRate = this.audioCtx.sampleRate;
-    const source = this.audioCtx.createMediaStreamSource(this.stream);
+    this.sourceNode = this.audioCtx.createMediaStreamSource(this.stream);
     this.processor = this.audioCtx.createScriptProcessor(4096, 1, 1);
+    this.silentGain = this.audioCtx.createGain();
+    this.silentGain.gain.value = 0;
 
     this.processor.onaudioprocess = (event) => {
       if (!this.isRecording) return;
@@ -148,18 +172,31 @@ export class LocalWavRecorder {
       }
     };
 
-    source.connect(this.processor);
-    this.processor.connect(this.audioCtx.destination);
+    this.sourceNode.connect(this.processor);
+    this.processor.connect(this.silentGain);
+    this.silentGain.connect(this.audioCtx.destination);
     this.isRecording = true;
   }
 
   stop(): Blob | null {
-    if (!this.isRecording) return null;
+    this.startGeneration += 1;
+    if (!this.isRecording) {
+      this.stream?.getTracks().forEach((t) => t.stop());
+      this.stream = null;
+      return null;
+    }
     this.isRecording = false;
     this.callbacks.onVolumeChange?.(0);
 
-    this.processor?.disconnect();
-    this.processor = null;
+    if (this.processor) {
+      this.processor.onaudioprocess = null;
+      this.processor.disconnect();
+      this.processor = null;
+    }
+    this.sourceNode?.disconnect();
+    this.sourceNode = null;
+    this.silentGain?.disconnect();
+    this.silentGain = null;
     if (this.audioCtx) {
       void this.audioCtx.close();
       this.audioCtx = null;

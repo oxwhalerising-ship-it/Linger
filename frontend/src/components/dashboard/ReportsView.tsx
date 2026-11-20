@@ -156,13 +156,13 @@ export default function ReportsView({
     try {
       const res = await api.listReports();
       setReports(res.reports);
-      if (res.reports.length > 0 && !selected) {
-        setSelected(res.reports[0]);
+      if (res.reports.length > 0) {
+        setSelected((prev) => prev ?? res.reports[0]);
       }
     } catch {
       // ignore
     }
-  }, [selected]);
+  }, []);
 
   useEffect(() => {
     void loadReports();

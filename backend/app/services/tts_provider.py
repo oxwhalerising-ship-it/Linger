@@ -10,6 +10,7 @@
 """
 
 import abc
+import asyncio
 import hashlib
 import json
 import os
@@ -137,16 +138,22 @@ class FishAudioTTSProvider(BaseTTSProvider):
 
     API_URL = "https://api.fish.audio/v1/tts"
     _shared_session: aiohttp.ClientSession | None = None
+    _session_lock: asyncio.Lock | None = None
 
     @classmethod
     async def _get_session(cls) -> aiohttp.ClientSession:
-        if cls._shared_session is None or cls._shared_session.closed:
-            connector = aiohttp.TCPConnector(limit=16, keepalive_timeout=60)
-            timeout = aiohttp.ClientTimeout(total=30, connect=10)
-            cls._shared_session = aiohttp.ClientSession(
-                connector=connector,
-                timeout=timeout,
-            )
+        if cls._shared_session is not None and not cls._shared_session.closed:
+            return cls._shared_session
+        if cls._session_lock is None:
+            cls._session_lock = asyncio.Lock()
+        async with cls._session_lock:
+            if cls._shared_session is None or cls._shared_session.closed:
+                connector = aiohttp.TCPConnector(limit=16, keepalive_timeout=60)
+                timeout = aiohttp.ClientTimeout(total=30, connect=10)
+                cls._shared_session = aiohttp.ClientSession(
+                    connector=connector,
+                    timeout=timeout,
+                )
         return cls._shared_session
 
     @classmethod
@@ -341,24 +348,36 @@ def read_tts_cache(cache_path: Path) -> Path | None:
     return None
 
 
+_TTS_WRITE_COUNTER = 0
+
+
 def write_tts_cache(cache_path: Path, audio_bytes: bytes) -> None:
-    """原子写入本地 TTS 缓存，并按 LRU 自动淘汰超出上限的旧音频文件"""
+    """原子写入本地 TTS 缓存（使用唯一临时文件名防 Windows 并发冲突），并定期按 LRU 淘汰旧文件"""
+    global _TTS_WRITE_COUNTER
     if not audio_bytes:
         return
+    tmp_path = cache_path.with_name(f".{cache_path.name}.{os.getpid()}.{id(audio_bytes)}.tmp")
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = cache_path.with_suffix(".mp3.tmp")
         tmp_path.write_bytes(audio_bytes)
         os.replace(tmp_path, cache_path)
 
-        files = list(TTS_CACHE_DIR.glob("*.mp3"))
-        if len(files) > TTS_CACHE_MAX_FILES:
-            files.sort(key=lambda p: p.stat().st_mtime)
-            for old_file in files[: len(files) - TTS_CACHE_MAX_FILES]:
-                try:
-                    old_file.unlink(missing_ok=True)
-                except OSError:
-                    pass
+        _TTS_WRITE_COUNTER += 1
+        if _TTS_WRITE_COUNTER % 20 == 0:
+            files = list(TTS_CACHE_DIR.glob("*.mp3"))
+            if len(files) > TTS_CACHE_MAX_FILES:
+                files.sort(key=lambda p: p.stat().st_mtime)
+                for old_file in files[: len(files) - TTS_CACHE_MAX_FILES]:
+                    try:
+                        old_file.unlink(missing_ok=True)
+                    except OSError:
+                        pass
     except OSError:
         # 磁盘缓存写入失败不影响正常播报
         pass
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass

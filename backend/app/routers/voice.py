@@ -123,16 +123,20 @@ async def synthesize_speech(payload: TTSRequest):
                 },
             )
 
-        # Edge-TTS 边流式输出边收集分片，流结束后写入本地缓存供重播秒开
+        # Edge-TTS 先预取首个分片，确保网络/鉴权错误能作为 HTTP 502 返回而非伪装成 200 空流
+        stream_iter = provider.stream_chunks(
+            text=payload.text, voice=voice, rate=rate, pitch=pitch
+        )
+        first_chunk = await stream_iter.__anext__()
+
         async def _stream_and_cache():
-            collected: list[bytes] = []
-            async for chunk in provider.stream_chunks(
-                text=payload.text, voice=voice, rate=rate, pitch=pitch
-            ):
+            collected: list[bytes] = [first_chunk]
+            yield first_chunk
+            async for chunk in stream_iter:
                 collected.append(chunk)
                 yield chunk
             if collected:
-                write_tts_cache(cache_path, b"".join(collected))
+                await asyncio.to_thread(write_tts_cache, cache_path, b"".join(collected))
 
         return StreamingResponse(
             _stream_and_cache(),
@@ -143,6 +147,8 @@ async def synthesize_speech(payload: TTSRequest):
                 "Access-Control-Expose-Headers": "X-TTS-Provider, X-TTS-Cache",
             },
         )
+    except StopAsyncIteration as exc:
+        raise HTTPException(status_code=502, detail="语音合成失败：未返回任何音频数据") from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"语音合成失败：{exc}") from exc
 
@@ -183,10 +189,15 @@ def stt_engine_status():
     return get_stt_status()
 
 
+MAX_STT_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB 上限，防止异常超大上传导致 OOM
+
+
 @router.post("/stt")
 async def speech_to_text(audio: UploadFile = File(..., description="16kHz 单声道 PCM WAV 音频文件")):
     """接收前端录制的 WAV 音频，优先本地离线 Faster-Whisper / sherpa-onnx，未装离线引擎时兜底 Fish Audio ASR"""
-    wav_bytes = await audio.read()
+    wav_bytes = await audio.read(MAX_STT_UPLOAD_BYTES + 1)
+    if len(wav_bytes) > MAX_STT_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="上传音频超过 20MB 大小限制")
     if not wav_bytes:
         raise HTTPException(status_code=400, detail="上传的音频内容为空")
 
@@ -222,10 +233,11 @@ def wakeword_status():
 async def toggle_wakeword(payload: WakewordToggleRequest):
     """开启/关闭本地离线语音唤醒并保存自定义唤醒词"""
     loop = asyncio.get_running_loop()
-    return wakeword_engine.toggle(
-        enabled=payload.enabled,
-        keyword=payload.keyword,
-        loop=loop,
+    return await asyncio.to_thread(
+        wakeword_engine.toggle,
+        payload.enabled,
+        payload.keyword,
+        loop,
     )
 
 

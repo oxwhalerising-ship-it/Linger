@@ -166,7 +166,9 @@ export class VoiceCallEngine {
   // 麦克风常驻采集管线
   private micStream: MediaStream | null = null;
   private micCtx: AudioContext | null = null;
+  private micSource: MediaStreamAudioSourceNode | null = null;
   private micProcessor: ScriptProcessorNode | null = null;
+  private micSilentGain: GainNode | null = null;
   private micSampleRate = 48000;
 
   // 自适应底噪 + 预录缓冲 + VAD 状态
@@ -280,12 +282,12 @@ export class VoiceCallEngine {
     this.micCtx = micCtx;
     this.micSampleRate = this.micCtx.sampleRate;
 
-    const source = this.micCtx.createMediaStreamSource(this.micStream);
+    this.micSource = this.micCtx.createMediaStreamSource(this.micStream);
     this.micProcessor = this.micCtx.createScriptProcessor(MIC_BUFFER_SIZE, 1, 1);
 
     // 接入静音增益节点防止麦克风回传产生啸叫
-    const silentGain = this.micCtx.createGain();
-    silentGain.gain.value = 0;
+    this.micSilentGain = this.micCtx.createGain();
+    this.micSilentGain.gain.value = 0;
 
     this.micProcessor.onaudioprocess = (event) => {
       if (this.disposed) return;
@@ -293,9 +295,9 @@ export class VoiceCallEngine {
       this.handleMicFrame(input);
     };
 
-    source.connect(this.micProcessor);
-    this.micProcessor.connect(silentGain);
-    silentGain.connect(this.micCtx.destination);
+    this.micSource.connect(this.micProcessor);
+    this.micProcessor.connect(this.micSilentGain);
+    this.micSilentGain.connect(this.micCtx.destination);
   }
 
   private connectWebSocket(): Promise<void> {
@@ -309,6 +311,17 @@ export class VoiceCallEngine {
       const connectTimer = window.setTimeout(() => {
         if (!settled) {
           settled = true;
+          ws.onopen = null;
+          ws.onerror = null;
+          ws.onclose = null;
+          try {
+            ws.close();
+          } catch {
+            // ignore
+          }
+          if (this.ws === ws) {
+            this.ws = null;
+          }
           reject(new Error("连接本地实时语音服务超时，请确认后端 8765 端口运行正常"));
         }
       }, 6000);
@@ -887,8 +900,15 @@ export class VoiceCallEngine {
 
     this.clearPlayback();
 
-    this.micProcessor?.disconnect();
-    this.micProcessor = null;
+    if (this.micProcessor) {
+      this.micProcessor.onaudioprocess = null;
+      this.micProcessor.disconnect();
+      this.micProcessor = null;
+    }
+    this.micSource?.disconnect();
+    this.micSource = null;
+    this.micSilentGain?.disconnect();
+    this.micSilentGain = null;
     if (this.micCtx) {
       void this.micCtx.close();
       this.micCtx = null;

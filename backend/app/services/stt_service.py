@@ -352,7 +352,8 @@ def transcribe_with_faster_whisper(
         if _whisper_device_used == "cuda" and any(
             k in err_lower for k in ("cublas", "cudnn", "cuda", "dll")
         ):
-            model = _load_cpu_whisper_model()
+            with _whisper_load_lock:
+                model = _load_cpu_whisper_model()
             raw_text, info = _run_transcribe(model)
         else:
             raise
@@ -380,14 +381,13 @@ def transcribe_with_faster_whisper(
 def _get_recognizer():
     """懒加载并缓存 sherpa-onnx OfflineRecognizer 实例（线程安全双重检查，优先 SenseVoiceSmall）"""
     global _recognizer_cache, _recognizer_checked, _recognizer_model_label
-    if _recognizer_checked:
+    if _recognizer_checked and _recognizer_cache is not None:
         return _recognizer_cache
 
     with _recognizer_load_lock:
-        if _recognizer_checked:
+        if _recognizer_checked and _recognizer_cache is not None:
             return _recognizer_cache
 
-        _recognizer_checked = True
         try:
             import sherpa_onnx
         except ImportError:
@@ -396,6 +396,8 @@ def _get_recognizer():
         model_files = _find_asr_model_files()
         if not model_files:
             return None
+
+        _recognizer_checked = True
 
         model_path = str(model_files["model"])
         tokens_path = str(model_files["tokens"])
@@ -611,8 +613,7 @@ async def polish_asr_transcript(raw_text: str) -> str:
             "你是一个专业的中文语音转文字（ASR）纠错与口语整理器。"
             f"常用专有名词参考：{'、'.join(hotwords)}。\n"
             "任务要求：\n"
-            "1. 纠正语音识别产生的同音错别字（尤其是把「小易/小意/小一/晓艺」等按语境纠正为「"
-            f"{bot_name}」）。\n"
+            f"1. 纠正语音识别产生的同音错别字（尤其是把与「{bot_name}」发音相近的误识别词按语境纠正为「{bot_name}」）。\n"
             "2. 轻微去除卡壳重复和多余口头禅（如连续的「呃、那个、就是啊」），补全准确标点，让句子自然通顺。\n"
             "3. 严禁改变用户原意，严禁回答用户的问题，严禁添加任何解释或前缀。\n"
             "4. 直接输出整理后的纯文本结果。"
@@ -629,7 +630,7 @@ async def polish_asr_transcript(raw_text: str) -> str:
             "max_tokens": max(160, min(2048, len(text) * 2 + 80)),
         }
 
-        think_mode = _FAST_THINK_MODE_CACHE.get((base_url, model))
+        think_mode = _FAST_THINK_MODE_CACHE.get((base_url.lower(), model.lower()))
         if think_mode == "disabled":
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         elif think_mode == "effort_minimal":

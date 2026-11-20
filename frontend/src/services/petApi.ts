@@ -73,16 +73,21 @@ export async function playFillerSound(
     const url = `${getBackendBaseUrl()}/api/voice/fillers/${fillerId}`;
     await new Promise<void>((resolve) => {
       const audio = new Audio(url);
-      const cleanup = () => resolve();
+      let settled = false;
+      const onAbort = () => {
+        audio.pause();
+        cleanup();
+      };
+      const cleanup = () => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", onAbort);
+        audio.onended = null;
+        audio.onerror = null;
+        resolve();
+      };
       if (signal) {
-        signal.addEventListener(
-          "abort",
-          () => {
-            audio.pause();
-            cleanup();
-          },
-          { once: true },
-        );
+        signal.addEventListener("abort", onAbort, { once: true });
       }
       audio.onended = cleanup;
       audio.onerror = cleanup;
@@ -226,20 +231,23 @@ export async function playTaiwanSentences(
       const audioUrl = URL.createObjectURL(blob);
       await new Promise<void>((resolve) => {
         const audio = new Audio(audioUrl);
+        let settled = false;
+        const onAbort = () => {
+          audio.pause();
+          cleanup();
+        };
         const cleanup = () => {
+          if (settled) return;
+          settled = true;
+          options?.signal?.removeEventListener("abort", onAbort);
+          audio.onended = null;
+          audio.onerror = null;
           URL.revokeObjectURL(audioUrl);
           resolve();
         };
 
         if (options?.signal) {
-          options.signal.addEventListener(
-            "abort",
-            () => {
-              audio.pause();
-              cleanup();
-            },
-            { once: true },
-          );
+          options.signal.addEventListener("abort", onAbort, { once: true });
         }
 
         audio.onended = cleanup;
