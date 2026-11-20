@@ -70,16 +70,35 @@ const APP_ICON_ICO = path.join(__dirname, "assets", "linger-icon.ico");
 const APP_ICON_PNG = path.join(__dirname, "assets", "linger-icon.png");
 
 /**
- * 加载灵儿专属系统托盘图标（优先高精度 PNG 缩放至 32x32 适配 Windows HiDPI）
+ * 加载灵儿专属图标：
+ * - Windows 优先使用多分辨率 .ico（托盘 16/24/32px 与任务栏/标题栏原生清晰匹配，不模糊）
+ * - 兜底使用高精度 PNG
  */
+function loadAppIcon() {
+  if (process.platform === "win32") {
+    const icoImg = nativeImage.createFromPath(APP_ICON_ICO);
+    if (!icoImg.isEmpty()) {
+      return icoImg;
+    }
+  }
+  const pngImg = nativeImage.createFromPath(APP_ICON_PNG);
+  if (!pngImg.isEmpty()) {
+    return pngImg;
+  }
+  return nativeImage.createEmpty();
+}
+
 function createTrayIcon() {
+  if (process.platform === "win32") {
+    // Windows 托盘直接传 .ico 路径可让系统按当前 DPI 自动挑选最清晰的 16/20/24/32px 帧
+    const icoImg = nativeImage.createFromPath(APP_ICON_ICO);
+    if (!icoImg.isEmpty()) {
+      return icoImg;
+    }
+  }
   const pngImg = nativeImage.createFromPath(APP_ICON_PNG);
   if (!pngImg.isEmpty()) {
     return pngImg.resize({ width: 32, height: 32, quality: "best" });
-  }
-  const icoImg = nativeImage.createFromPath(APP_ICON_ICO);
-  if (!icoImg.isEmpty()) {
-    return icoImg;
   }
   return nativeImage.createEmpty();
 }
@@ -857,7 +876,7 @@ function createPetWindow() {
     x: pos.x,
     y: pos.y,
     title: "",
-    icon: APP_ICON_ICO,
+    icon: loadAppIcon(),
     transparent: true,
     backgroundColor: "#00000000",
     backgroundMaterial: "none",
@@ -959,7 +978,7 @@ function openDashboardWindow() {
     minWidth: 780,
     minHeight: 560,
     title: "灵儿 — 台湾腔治愈系小管家",
-    icon: APP_ICON_ICO,
+    icon: loadAppIcon(),
     backgroundColor: "#ffffff",
     webPreferences: {
       contextIsolation: true,
@@ -967,6 +986,7 @@ function openDashboardWindow() {
       preload: path.join(__dirname, "preload.cjs"),
     },
   });
+  dashboardWindow.setIcon(loadAppIcon());
 
   dashboardWindow.on("page-title-updated", (event) => {
     event.preventDefault();
@@ -1400,8 +1420,11 @@ if (!gotSingleInstanceLock) {
     refreshTrayMenu();
   });
 
-  // Electron 初始化完成：同时打开主控面板与透明桌宠浮窗，注册全局召唤快捷键，并驻留系统托盘
+  // Electron 初始化完成：设置 Windows AppUserModelId 确保任务栏与托盘稳定显示灵儿专属图标
   app.whenReady().then(() => {
+    if (process.platform === "win32") {
+      app.setAppUserModelId("com.taiwanbot.linger");
+    }
     setupIpcHandlers();
     openDashboardWindow();
     createPetWindow();
