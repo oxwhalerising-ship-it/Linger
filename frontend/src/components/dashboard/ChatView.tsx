@@ -22,6 +22,7 @@ import {
   type SttStatusData,
 } from "../../services/api";
 import {
+  createSentencePlayer,
   playFillerSound,
   playTaiwanSentences,
   sendQuickChat,
@@ -329,10 +330,62 @@ export default function ChatView({
       }
 
       const startedPerf = performance.now();
+      const assistantId = `a-${sentAtMs}`;
+      let liveText = "";
+      let emotion: PetEmotion = "happy";
+      const upsertAssistant = (patch: Partial<LocalChatBubble>) => {
+        setMessages((prev) => {
+          const idx = prev.findIndex((item) => item.id === assistantId);
+          if (idx === -1) {
+            return [
+              ...prev,
+              {
+                id: assistantId,
+                role: "assistant",
+                content: patch.content ?? "",
+                time: new Date().toTimeString().slice(0, 5),
+                createdAtMs: Date.now(),
+                ...patch,
+              },
+            ];
+          }
+          const next = prev.slice();
+          next[idx] = { ...next[idx], ...patch };
+          return next;
+        });
+      };
+      const player = autoSpeak
+        ? createSentencePlayer({
+            rate: voiceRate,
+            signal: controller.signal,
+            onStartSpeaking: () => setBotEmotion("speaking"),
+            onFinishSpeaking: () => setBotEmotion(emotion),
+          })
+        : null;
       try {
-        const res = await sendQuickChat(text, mode, "manual");
-        const durationMs = Math.max(100, Math.round(performance.now() - startedPerf));
-        const repliedAtMs = Date.now();
+        const res = await sendQuickChat(text, mode, "manual", {
+          signal: controller.signal,
+          onSentence: (sentence) => {
+            liveText = liveText ? `${liveText}${sentence}` : sentence;
+            upsertAssistant({ content: liveText });
+            player?.push(sentence);
+          },
+          onReply: (reply) => {
+            emotion = reply.emotion || "happy";
+            const durationMs = reply.duration_ms ?? Math.max(100, Math.round(performance.now() - startedPerf));
+            upsertAssistant({
+              content: reply.reply,
+              sentences: reply.sentences,
+              durationMs,
+            });
+            setSending(false);
+            setBotEmotion(emotion);
+            window.taiwanBotEnv?.sendPetPreviewState({
+              emotion,
+              bubble: reply.reply,
+            });
+          },
+        });
         const tags: string[] = [];
         if (res.extracted?.habit_updates?.length) {
           tags.push(`已静默记录 ${res.extracted.habit_updates.length} 项习惯`);
@@ -346,39 +399,18 @@ export default function ChatView({
         if (res.used_offline_fallback) {
           tags.push("离线演示回复");
         }
-
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `a-${repliedAtMs}`,
-            role: "assistant",
-            content: res.reply,
-            sentences: res.sentences,
-            time: new Date(repliedAtMs).toTimeString().slice(0, 5),
-            createdAtMs: repliedAtMs,
-            durationMs,
-            tags,
-          },
-        ]);
-        setNowTick(repliedAtMs);
-        setPendingHabits(res.pending_habits || []);
-        // 收到文字回复后立刻结束“思考中”状态，让语音在后台异步播放，不再阻塞发送下一条消息
-        setSending(false);
-        window.taiwanBotEnv?.sendPetPreviewState({
-          emotion: res.emotion,
-          bubble: res.reply,
+        emotion = res.emotion || emotion;
+        upsertAssistant({
+          content: res.reply,
+          sentences: res.sentences,
+          tags,
+          durationMs: res.duration_ms ?? Math.max(100, Math.round(performance.now() - startedPerf)),
         });
-
-        if (autoSpeak && res.sentences.length > 0) {
-          void playTaiwanSentences(res.sentences, {
-            rate: voiceRate,
-            signal: controller.signal,
-            onStartSpeaking: () => setBotEmotion("speaking"),
-            onFinishSpeaking: () => setBotEmotion(res.emotion || "happy"),
-          }).catch(() => {});
-        } else {
-          setBotEmotion(res.emotion || "happy");
-        }
+        setNowTick(Date.now());
+        setPendingHabits(res.pending_habits || []);
+        setSending(false);
+        if (!player) setBotEmotion(emotion);
+        await player?.close();
       } catch (err) {
         setBotEmotion("encouraging");
         setStatusHint(
@@ -388,6 +420,7 @@ export default function ChatView({
         );
       } finally {
         setSending(false);
+        await player?.close();
       }
     },
     [autoSpeak, mode, sending, voiceRate],
@@ -1166,8 +1199,8 @@ export default function ChatView({
                 />
                 <span className="text-[11px] text-[var(--text-tertiary)] truncate">
                   {sttStatus?.ready
-                    ? sttStatus.engine === "faster-whisper"
-                      ? "Faster-Whisper 本地识别就绪"
+                    ? sttStatus.engine === "sherpa-onnx"
+                      ? "SenseVoice Small 本地识别就绪"
                       : sttStatus.engine === "fish-audio"
                         ? "Fish Audio 语音识别就绪"
                         : "离线语音识别就绪"

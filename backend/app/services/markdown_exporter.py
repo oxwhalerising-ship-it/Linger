@@ -53,7 +53,7 @@ def _build_markdown_text(
         "---",
         f"date: {date_str}",
         "tags:",
-        "  - taiwanbot",
+        "  - linger",
         "  - daily-review",
         f"mood_score: {mood_score if mood_score is not None else 'null'}",
         f"energy_score: {energy_score if energy_score is not None else 'null'}",

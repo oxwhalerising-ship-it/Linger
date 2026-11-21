@@ -1,0 +1,3 @@
+# 只在开发机上装。打包进安装包的是 requirements.txt。
+pytest>=8.3.0
+httpx>=0.27.0

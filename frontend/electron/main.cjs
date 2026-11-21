@@ -20,6 +20,12 @@ const {
 } = require("electron");
 const { attachWindowSecurityGuards } = require("./security.cjs");
 const { createWin32WindowTracker } = require("./docking/win32Tracker.cjs");
+const {
+  startBackendHost,
+  stopBackendHost,
+  getBackendStatus,
+  readAuthToken,
+} = require("./backendHost.cjs");
 
 let petWindow = null;
 let dashboardWindow = null;
@@ -1391,6 +1397,9 @@ function setupIpcHandlers() {
     }
   });
 
+  ipcMain.handle("auth:get-token", () => readAuthToken());
+  ipcMain.handle("backend:get-status", () => getBackendStatus());
+
   ipcMain.handle("app:set-autostart", (_event, enabled) => {
     try {
       if (!app.isPackaged) {
@@ -1423,8 +1432,9 @@ if (!gotSingleInstanceLock) {
   // Electron 初始化完成：设置 Windows AppUserModelId 确保任务栏与托盘稳定显示灵儿专属图标
   app.whenReady().then(() => {
     if (process.platform === "win32") {
-      app.setAppUserModelId("com.taiwanbot.linger");
+      app.setAppUserModelId("com.linger.desktop");
     }
+    void startBackendHost();
     setupIpcHandlers();
     openDashboardWindow();
     createPetWindow();
@@ -1442,6 +1452,7 @@ if (!gotSingleInstanceLock) {
 
 // 拦截退出前标记，确保彻底关闭
 app.on("before-quit", () => {
+  stopBackendHost();
   stopPetDragLoop();
   stopPetSlideAnim();
   stopExternalWindowTracker();

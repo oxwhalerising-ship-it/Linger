@@ -2,9 +2,9 @@
 一对一低延迟实时语音通话全双工 WebSocket 路由（/ws/voice-call）
 ------------------------------------------------------------
 核心架构（极速流式双轨管道）：
-1. 连接建立（start_call）：后台立即预热本地 Faster-Whisper 模型，同时秒播缓存的台湾腔接听问候语。
+1. 连接建立（start_call）：后台立即预热本地 SenseVoice Small，同时秒播缓存的台湾腔接听问候语。
 2. 语音轮次（audio_meta + 二进制 WAV / audio_turn / text_turn）：
-   - 阶段 A（极速 STT）：本地 Faster-Whisper fast_mode（beam_size=1 + VAD 静音幻觉过滤）或 Fish Audio ASR 兜底。
+    - 阶段 A（极速 STT）：sherpa-onnx SenseVoice Small。
    - 阶段 B（流式 LLM 首句抢跑）：AsyncOpenAI(stream=True) 直接输出纯台湾腔短口语，增量分句器在第一句/首短语一完成就立即抛给 TTS。
    - 阶段 C（并发有序 TTS 推送）：最多 2 路并发合成后续句子，按 seq 严格顺序推送 MP3 音频帧给前端无缝播放；Fish Audio 异常时自动兜底 Edge-TTS，绝不冷场断音。
    - 阶段 D（副轨后台静默归档）：本轮结束后异步提取习惯打卡、心情、小确幸与长期记忆并导出 Markdown，零增加通话延迟。
@@ -21,6 +21,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.core.local_auth import accept_authorized_websocket
 from app.database import db_cursor
 from app.services.agent_brain import (
     IncrementalSentenceSplitter,
@@ -30,11 +31,9 @@ from app.services.agent_brain import (
     stream_voice_call_reply,
 )
 from app.services.stt_service import (
-    get_fish_asr_api_key,
     get_stt_status,
     polish_asr_transcript,
     transcribe_wav_bytes,
-    transcribe_with_fish_audio,
     warmup_stt_engine,
 )
 from app.services.tts_provider import (
@@ -67,22 +66,11 @@ def _load_call_settings() -> tuple[str, dict[str, Any]]:
 
 
 async def _transcribe_turn_audio(wav_bytes: bytes) -> tuple[str, str]:
-    """执行实时通话语音识别（优先阿里 SenseVoiceSmall，其次 Faster-Whisper / Fish Audio）并自动纠错整理"""
+    """实时通话听写：SenseVoice Small，然后做口语纠错。"""
     status = get_stt_status()
-    if status.get("engine") in ("faster-whisper", "sherpa-onnx") and status.get("ready"):
-        result = await asyncio.to_thread(transcribe_wav_bytes, wav_bytes, fast_mode=True)
-        raw_text = str(result.get("text") or "").strip()
-        engine = str(result.get("engine") or status["engine"])
-    else:
-        fish_key = get_fish_asr_api_key()
-        if fish_key:
-            result = await transcribe_with_fish_audio(wav_bytes, fish_key)
-            raw_text = str(result.get("text") or "").strip()
-            engine = "fish-audio"
-        else:
-            result = await asyncio.to_thread(transcribe_wav_bytes, wav_bytes, fast_mode=True)
-            raw_text = str(result.get("text") or "").strip()
-            engine = str(result.get("engine") or "local")
+    result = await asyncio.to_thread(transcribe_wav_bytes, wav_bytes)
+    raw_text = str(result.get("text") or "").strip()
+    engine = str(result.get("engine") or status.get("engine") or "local")
 
     if not raw_text:
         return "", engine
@@ -169,7 +157,8 @@ async def _synthesize_clause_bytes(
 @router.websocket("/ws/voice-call")
 async def voice_call_websocket(websocket: WebSocket):
     """一对一低延迟实时语音通话全双工通道"""
-    await websocket.accept()
+    if not await accept_authorized_websocket(websocket):
+        return
 
     send_lock = asyncio.Lock()
     ws_closed = False

@@ -16,7 +16,5 @@ APScheduler>=3.10.4
 # 模型权重不入库，请运行 `python backend/scripts/download_models.py` 自动下载至 data/models/
 numpy>=1.26.0
 sherpa-onnx>=1.12.0
-faster-whisper>=1.1.0
-huggingface-hub>=0.25.0
 sounddevice>=0.5.0
 pypinyin>=0.53.0

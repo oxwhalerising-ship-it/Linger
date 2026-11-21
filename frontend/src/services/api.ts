@@ -6,6 +6,7 @@
  */
 
 import {
+  buildAuthHeaders,
   getBackendBaseUrl,
   getWebSocketUrl,
   requestJson,
@@ -164,6 +165,14 @@ export interface SttStatusData {
   model_dir: string;
   message: string;
   setup_hints?: string[];
+}
+
+export interface ModelStatusData {
+  items: Array<{ id: string; name: string; ready: boolean; description: string }>;
+  missing: string[];
+  downloading: boolean;
+  error?: string | null;
+  started?: boolean;
 }
 
 export interface WakewordStatusData {
@@ -406,11 +415,14 @@ export const api = {
       current: Record<string, unknown>;
     }>("/api/voice/voices"),
   getSttStatus: () => requestJson<SttStatusData>("/api/voice/stt/status"),
+  getModelStatus: () => requestJson<ModelStatusData>("/api/voice/models/status"),
   transcribeAudioWav: async (wavBlob: Blob): Promise<{ text: string }> => {
     const form = new FormData();
     form.append("audio", wavBlob, "speech.wav");
+    const headers = await buildAuthHeaders();
     const res = await fetch(`${getBackendBaseUrl()}/api/voice/stt`, {
       method: "POST",
+      headers,
       body: form,
     });
     if (!res.ok) {

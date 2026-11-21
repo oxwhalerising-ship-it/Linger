@@ -59,8 +59,17 @@ interface TaiwanBotEnv {
   onPetSummoned?: (
     callback: (payload: { shortcut?: string }) => void,
   ) => () => void;
+  getAuthToken?: () => Promise<string>;
+  getBackendStatus?: () => Promise<BackendStatus>;
+  onBackendStatus?: (callback: (status: BackendStatus) => void) => () => void;
+}
+
+interface BackendStatus {
+  state: "starting" | "installing" | "ready" | "down";
+  detail: string;
 }
 
 interface Window {
   taiwanBotEnv?: TaiwanBotEnv;
+  lingerEnv?: TaiwanBotEnv;
 }

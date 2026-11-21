@@ -10,7 +10,7 @@
  *    实现后端逐句推送 MP3 的零缝隙拼接播放，并用 AnalyserNode 实时输出声波振幅驱动通话 UI。
  */
 
-import { getVoiceCallWebSocketUrl } from "./api";
+import { openAuthedWebSocket } from "./api/client";
 import { encodePcmWav16kBuffer } from "./voice/pcmWavEncoder";
 import type { ChatMode } from "./petApi";
 import type { PetEmotion } from "../types/pet";
@@ -240,10 +240,9 @@ export class VoiceCallEngine {
     this.micSilentGain.connect(this.micCtx.destination);
   }
 
-  private connectWebSocket(): Promise<void> {
+  private async connectWebSocket(): Promise<void> {
+    const ws = await openAuthedWebSocket("/ws/voice-call");
     return new Promise((resolve, reject) => {
-      const url = getVoiceCallWebSocketUrl();
-      const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       this.ws = ws;
 
@@ -320,7 +319,7 @@ export class VoiceCallEngine {
       this.callbacks.onReady?.({
         botName: String(msg.bot_name || "灵儿"),
         sttReady: Boolean(msg.stt_ready),
-        sttEngine: String(msg.stt_engine || "faster-whisper"),
+        sttEngine: String(msg.stt_engine || "sherpa-onnx"),
         ttsProvider: String(msg.tts_provider || "edge_tts"),
       });
       // 等待问候语或立刻倾听

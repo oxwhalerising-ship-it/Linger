@@ -1,8 +1,8 @@
 {
-  "name": "taiwanbot-frontend",
-  "version": "0.1.0",
+  "name": "linger-frontend",
+  "version": "0.4.0",
   "private": true,
-  "description": "TaiwanBot 台湾腔治愈系桌面小管家前端（Electron + React + Vite）",
+  "description": "灵儿，台湾腔治愈系桌面小管家（Electron + React + Vite）",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -14,7 +14,25 @@
     "package:win": "npm run build && npx electron-builder --win nsis"
   },
   "build": {
-    "appId": "com.taiwanbot.linger",
+    "appId": "com.linger.desktop",
+    "extraResources": [
+      {
+        "from": "../backend/app",
+        "to": "linger-backend/app"
+      },
+      {
+        "from": "../backend/scripts",
+        "to": "linger-backend/scripts"
+      },
+      {
+        "from": "../backend/models.json",
+        "to": "linger-backend/models.json"
+      },
+      {
+        "from": "../backend/requirements.txt",
+        "to": "linger-backend/requirements.txt"
+      }
+    ],
     "productName": "灵儿管家",
     "directories": {
       "output": "release"

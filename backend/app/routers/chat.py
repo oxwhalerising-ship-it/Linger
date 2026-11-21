@@ -2,7 +2,8 @@
 台湾腔小管家对话与历史消息管理路由（/api/chat）
 --------------------------------------------
 提供：
-1. POST /api/chat：发送文本对话、生成台湾腔回复并静默归档
+1. POST /api/chat：整段回复（兼容旧客户端）
+   POST /api/chat/stream：首句先流出，归档在后面做
 2. GET  /api/chat/history：按日期读取聊天流（兼容主聊天室）
 3. 历史消息全量增删改查（统一 SQLite 库，按 channel='text' 文本对话 / channel='voice' 语音对话分区）：
    - GET    /api/chat/messages/summary      按日期与渠道统计汇总
@@ -13,9 +14,11 @@
    - POST   /api/chat/messages/batch-delete 批量勾选删除或按日期/渠道清理
 """
 
+import json
 from datetime import datetime
 from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from app.database import db_cursor
 from app.schemas import (
@@ -24,7 +27,7 @@ from app.schemas import (
     MessageCreate,
     MessageUpdate,
 )
-from app.services.agent_brain import run_agent_chat
+from app.services.agent_brain import iter_text_chat_events, run_agent_chat
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
@@ -61,6 +64,28 @@ def chat_with_bot(payload: ChatRequest):
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"对话大脑调用失败：{exc}") from exc
+
+
+@router.post("/stream")
+async def chat_with_bot_stream(payload: ChatRequest):
+    """文字对话的 SSE。先推 sentence，再说完后推 reply，归档结束后推 done。"""
+    validated_date = _validate_date_str(payload.date) if payload.date else None
+
+    async def events():
+        async for event, data in iter_text_chat_events(
+            user_message=payload.message,
+            date_str=validated_date,
+            mode=payload.mode,
+            trigger_type=payload.trigger_type,
+        ):
+            body = json.dumps(data, ensure_ascii=False)
+            yield f"event: {event}\ndata: {body}\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/history")

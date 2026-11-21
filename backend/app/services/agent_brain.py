@@ -798,3 +798,123 @@ async def archive_voice_call_turn_async(
         "pending_habits": pending_habits,
         "md_path": archive_result["md_path"],
     }
+
+
+def save_text_chat_messages(
+    date_str: str,
+    user_message: str,
+    assistant_reply: str,
+    trigger_type: str = "manual",
+    duration_ms: int | None = None,
+) -> None:
+    """把一轮文字对话写入 messages，渠道固定为 text。"""
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    with db_cursor() as cur:
+        if user_message.strip():
+            cur.execute(
+                """
+                INSERT INTO messages (session_date, channel, role, content, trigger_type, created_at)
+                VALUES (?, 'text', 'user', ?, ?, ?);
+                """,
+                (date_str, user_message.strip(), trigger_type, now_iso),
+            )
+        if assistant_reply.strip():
+            cur.execute(
+                """
+                INSERT INTO messages (session_date, channel, role, content, trigger_type, created_at, duration_ms)
+                VALUES (?, 'text', 'assistant', ?, ?, ?, ?);
+                """,
+                (date_str, assistant_reply.strip(), trigger_type, now_iso, duration_ms),
+            )
+
+
+async def iter_text_chat_events(
+    user_message: str,
+    date_str: str | None = None,
+    mode: str = "normal",
+    trigger_type: str = "manual",
+) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+    """
+    文字对话的首句抢跑。
+    口语回复沿用通话那条流式主轨，每凑成一句就先抛给前端去念。
+    习惯、心情和小确幸等整段说完再归档，不挡第一句出声。
+    """
+    from app.core.logging import redact_secrets
+
+    started = time.perf_counter()
+    today_str = date_str or datetime.now().strftime("%Y-%m-%d")
+    settings = _load_settings_dict()
+    api_key = str((settings.get("llm") or {}).get("api_key") or "").strip()
+    splitter = IncrementalSentenceSplitter()
+    parts: list[str] = []
+    sentences: list[str] = []
+    index = 0
+
+    def take(ready: list[str]) -> list[tuple[str, dict[str, Any]]]:
+        nonlocal index
+        events: list[tuple[str, dict[str, Any]]] = []
+        for text in ready:
+            sentences.append(text)
+            events.append(("sentence", {"index": index, "text": text}))
+            index += 1
+        return events
+
+    try:
+        async for delta in stream_voice_call_reply(user_message, today_str, mode):
+            parts.append(delta)
+            for event in take(splitter.feed(delta)):
+                yield event
+        for event in take(splitter.flush()):
+            yield event
+    except Exception as exc:
+        reply = "".join(parts).strip()
+        if reply:
+            save_text_chat_messages(today_str, user_message, reply, trigger_type)
+        yield ("error", {"detail": redact_secrets(str(exc))[:300] or "对话中断了"})
+        return
+
+    reply = "".join(parts).strip()
+    if not reply:
+        reply = "欸～我刚刚不小心放空了一下下，你可以再跟我说一次吗？"
+    if not sentences:
+        for event in take(split_sentences_for_streaming(reply)):
+            yield event
+
+    emotion = infer_reply_emotion(reply)
+    if emotion not in ("happy", "encouraging", "thinking", "sleepy", "listening", "idle"):
+        emotion = "happy"
+    duration_ms = max(1, round((time.perf_counter() - started) * 1000))
+    save_text_chat_messages(today_str, user_message, reply, trigger_type, duration_ms)
+
+    reply_payload = {
+        "date": today_str,
+        "reply": reply,
+        "sentences": list(sentences),
+        "emotion": emotion,
+        "duration_ms": duration_ms,
+        "used_offline_fallback": not bool(api_key),
+    }
+    yield ("reply", reply_payload)
+
+    empty_applied = {
+        "habit_updates": [],
+        "mood_score": None,
+        "energy_score": None,
+        "new_highlights": [],
+        "new_memories": [],
+    }
+    try:
+        archive = await archive_voice_call_turn_async(today_str, user_message, reply, mode)
+    except Exception as exc:
+        logger.warning("文字对话归档失败: %s", redact_secrets(str(exc))[:300])
+        archive = {"applied": empty_applied, "pending_habits": [], "md_path": ""}
+
+    yield (
+        "done",
+        {
+            **reply_payload,
+            "extracted": archive.get("applied") or empty_applied,
+            "pending_habits": archive.get("pending_habits") or [],
+            "md_path": archive.get("md_path") or "",
+        },
+    )

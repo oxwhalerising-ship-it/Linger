@@ -11,12 +11,11 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from app.database import db_cursor
 from app.schemas import TTSRequest, WakewordToggleRequest
+from app.services.model_catalog import get_model_status, start_model_download_if_missing
 from app.services.stt_service import (
-    get_fish_asr_api_key,
     get_stt_status,
     polish_asr_transcript,
     transcribe_wav_bytes,
-    transcribe_with_fish_audio,
 )
 from app.services.tts_provider import (
     FISH_AUDIO_MODELS,
@@ -195,23 +194,15 @@ MAX_STT_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB 上限，防止异常超大上�
 
 @router.post("/stt")
 async def speech_to_text(audio: UploadFile = File(..., description="16kHz 单声道 PCM WAV 音频文件")):
-    """接收前端录制的 WAV 音频，优先本地离线 Faster-Whisper / sherpa-onnx，未装离线引擎时兜底 Fish Audio ASR"""
+    """接收前端录制的 WAV，用 SenseVoice Small 转写。"""
     wav_bytes = await audio.read(MAX_STT_UPLOAD_BYTES + 1)
     if len(wav_bytes) > MAX_STT_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="上传音频超过 20MB 大小限制")
     if not wav_bytes:
         raise HTTPException(status_code=400, detail="上传的音频内容为空")
 
-    status = get_stt_status()
     try:
-        if status.get("engine") in ("faster-whisper", "sherpa-onnx") and status.get("ready"):
-            result = await asyncio.to_thread(transcribe_wav_bytes, wav_bytes)
-        else:
-            fish_key = get_fish_asr_api_key()
-            if fish_key:
-                result = await transcribe_with_fish_audio(wav_bytes, fish_key)
-            else:
-                result = await asyncio.to_thread(transcribe_wav_bytes, wav_bytes)
+        result = await asyncio.to_thread(transcribe_wav_bytes, wav_bytes)
 
         raw_text = str(result.get("text") or "").strip()
         if raw_text:
@@ -222,6 +213,21 @@ async def speech_to_text(audio: UploadFile = File(..., description="16kHz 单声
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"音频解析或识别失败：{exc}") from exc
+
+
+@router.get("/models/status")
+def model_download_status():
+    """本地语音模型是否齐全，以及是不是正在后台下载。"""
+    return get_model_status()
+
+
+@router.post("/models/download")
+def model_download_start():
+    """手动再触发一次缺失模型下载。已经在下或都齐了就直接返回现状。"""
+    started = start_model_download_if_missing()
+    status = get_model_status()
+    status["started"] = started
+    return status
 
 
 @router.get("/wakeword/status")

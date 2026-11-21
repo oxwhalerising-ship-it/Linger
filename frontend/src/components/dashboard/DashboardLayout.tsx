@@ -130,6 +130,7 @@ export default function DashboardLayout() {
   const [theme, setTheme] = useState<"light" | "dark">(getInitialTheme);
   const [petActive, setPetActive] = useState(true);
   const [health, setHealth] = useState<HealthData | null>(null);
+  const [brainDetail, setBrainDetail] = useState<string | null>(null);
   const isElectron = Boolean(window.taiwanBotEnv);
 
   const dragStartXRef = useRef(0);
@@ -287,12 +288,36 @@ export default function DashboardLayout() {
     };
   }, [isResizing, triggerSnapTransition]);
 
-  // 健康检查
+  // 健康检查。大脑没起来或正在下模型时，侧边栏一直说人话。
   useEffect(() => {
-    void api
-      .getHealth()
-      .then((h) => setHealth(h))
-      .catch(() => setHealth(null));
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const next = await api.getHealth();
+        if (stopped) return;
+        setHealth(next);
+        const models = await api.getModelStatus();
+        if (stopped) return;
+        if (models.downloading) setBrainDetail("正在下载本地语音模型");
+        else if (models.error) setBrainDetail("语音模型下载失败");
+        else if (models.missing.length > 0) setBrainDetail("本地语音模型未就绪");
+        else setBrainDetail(null);
+      } catch {
+        if (!stopped) setHealth(null);
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 4000);
+    const off = window.taiwanBotEnv?.onBackendStatus?.((status) => {
+      if (status.state === "ready") return;
+      setBrainDetail(status.detail);
+      if (status.state === "down") setHealth(null);
+    });
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      off?.();
+    };
   }, []);
 
   const currentWidth = isCompact ? COMPACT_RAIL_WIDTH : sidebarWidth;
@@ -531,8 +556,10 @@ export default function DashboardLayout() {
                 showCompactTip(
                   e,
                   health
-                    ? `本地大脑在线 · v${health.version}`
-                    : "后端未连接",
+                    ? brainDetail
+                      ? `${brainDetail} · v${health.version}`
+                      : `本地大脑在线 · v${health.version}`
+                    : brainDetail || "后端未连接",
                 )
               }
               onMouseLeave={hideCompactTip}
@@ -541,7 +568,11 @@ export default function DashboardLayout() {
               <span className="w-9 h-7 flex items-center justify-center shrink-0">
                 <span
                   className={`w-1.5 h-1.5 rounded-full ${
-                    health ? "bg-emerald-500" : "bg-rose-500"
+                    health && !brainDetail
+                      ? "bg-emerald-500"
+                      : health
+                        ? "bg-amber-500"
+                        : "bg-rose-500"
                   }`}
                 />
               </span>
@@ -553,10 +584,10 @@ export default function DashboardLayout() {
                 }`}
               >
                 <span className="truncate">
-                  {health ? "本地大脑在线" : "后端未连接"}
+                  {health ? brainDetail || "本地大脑在线" : brainDetail || "后端未连接"}
                 </span>
                 <span className="font-mono text-[10.5px] opacity-80 shrink-0 ml-2">
-                  v{health?.version ?? "0.2"}
+                  v{health?.version ?? "0.4"}
                 </span>
               </span>
             </div>

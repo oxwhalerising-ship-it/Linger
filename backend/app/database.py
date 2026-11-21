@@ -8,15 +8,26 @@ SQLite 本地数据库管理模块
 """
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator
 
-# 项目根目录与本地数据目录（d:\02_TaiwanBot\data）
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / "data"
+# backend/app/database.py 的上一级是后端目录。开发时它叫 backend，打包后叫 linger-backend。
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = BACKEND_DIR.parent if BACKEND_DIR.name == "backend" else BACKEND_DIR
+MODELS_MANIFEST = BACKEND_DIR / "models.json"
+# 数据库文件名保持 taiwanbot.db，避免把已经在用的日记库改名弄丢。
+# 打包后的 Electron 会设置 LINGER_DATA_DIR，把数据放到用户目录而不是安装目录。
+_data_override = os.environ.get("LINGER_DATA_DIR", "").strip()
+if _data_override:
+    DATA_DIR = Path(_data_override)
+elif BACKEND_DIR.name == "backend":
+    DATA_DIR = PROJECT_ROOT / "data"
+else:
+    DATA_DIR = BACKEND_DIR / "data"
 DB_PATH = DATA_DIR / "taiwanbot.db"
 NOTES_DIR = DATA_DIR / "notes"
 DAILY_NOTES_DIR = NOTES_DIR / "daily"

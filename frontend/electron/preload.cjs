@@ -7,7 +7,7 @@
 
 const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("taiwanBotEnv", {
+const lingerEnv = {
   platform: process.platform,
   backendBaseUrl: "http://127.0.0.1:8765",
 
@@ -131,4 +131,15 @@ contextBridge.exposeInMainWorld("taiwanBotEnv", {
     ipcRenderer.on("pet:summoned", listener);
     return () => ipcRenderer.removeListener("pet:summoned", listener);
   },
-});
+
+  getAuthToken: () => ipcRenderer.invoke("auth:get-token"),
+  getBackendStatus: () => ipcRenderer.invoke("backend:get-status"),
+  onBackendStatus: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("backend:status", listener);
+    return () => ipcRenderer.removeListener("backend:status", listener);
+  },
+};
+
+contextBridge.exposeInMainWorld("taiwanBotEnv", lingerEnv);
+contextBridge.exposeInMainWorld("lingerEnv", lingerEnv);

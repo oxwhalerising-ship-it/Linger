@@ -10,17 +10,53 @@
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+function desktopEnv(): Window["taiwanBotEnv"] {
+  return window.lingerEnv ?? window.taiwanBotEnv;
+}
+
+let tokenPromise: Promise<string> | null = null;
+
+export function getAuthToken(): Promise<string> {
+  if (!tokenPromise) {
+    const reader = desktopEnv()?.getAuthToken;
+    tokenPromise = reader ? reader().then((token) => token || "") : Promise.resolve("");
+  }
+  return tokenPromise;
+}
+
+export async function buildAuthHeaders(
+  extra?: HeadersInit,
+): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  if (extra instanceof Headers) {
+    extra.forEach((value, key) => {
+      headers[key] = value;
+    });
+  } else if (Array.isArray(extra)) {
+    for (const [key, value] of extra) headers[key] = value;
+  } else if (extra) {
+    Object.assign(headers, extra);
+  }
+  const token = await getAuthToken();
+  if (token) headers["X-Linger-Token"] = token;
+  return headers;
+}
+
 export function getBackendBaseUrl(): string {
-  return (window.taiwanBotEnv?.backendBaseUrl ?? DEFAULT_BACKEND_URL).replace(
-    /\/+$/,
-    "",
-  );
+  return (desktopEnv()?.backendBaseUrl ?? DEFAULT_BACKEND_URL).replace(/\/+$/, "");
 }
 
 export function getWebSocketUrl(path: string): string {
   const wsBase = getBackendBaseUrl().replace(/^http/, "ws");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   return `${wsBase}${normalizedPath}`;
+}
+
+export async function openAuthedWebSocket(path: string): Promise<WebSocket> {
+  const token = await getAuthToken();
+  const url = getWebSocketUrl(path);
+  if (!token) return new WebSocket(url);
+  return new WebSocket(url, [`linger-auth.${token}`]);
 }
 
 export async function parseFastApiError(res: Response): Promise<string> {
@@ -77,12 +113,9 @@ export async function requestJson<T>(
   try {
     const hasBody = init?.body !== undefined && init?.body !== null;
     const isFormData = hasBody && init?.body instanceof FormData;
-    const headers: Record<string, string> = {};
-    if (hasBody && !isFormData) {
+    const headers = await buildAuthHeaders(init?.headers);
+    if (hasBody && !isFormData && !headers["Content-Type"] && !headers["content-type"]) {
       headers["Content-Type"] = "application/json";
-    }
-    if (init?.headers) {
-      Object.assign(headers, init.headers as Record<string, string>);
     }
 
     const res = await fetch(`${getBackendBaseUrl()}${path}`, {

@@ -22,8 +22,13 @@ import PetCallBar, {
 } from "./PetCallBar";
 import PetRadialMenu from "./PetRadialMenu";
 import QuickVoiceBar from "./QuickVoiceBar";
-import { api, getEventsWebSocketUrl } from "../../services/api";
-import { playTaiwanSentences, sendQuickChat } from "../../services/petApi";
+import { api } from "../../services/api";
+import { openAuthedWebSocket } from "../../services/api/client";
+import {
+  createSentencePlayer,
+  playTaiwanSentences,
+  sendQuickChat,
+} from "../../services/petApi";
 import {
   playPetSound,
   preloadPetSounds,
@@ -75,6 +80,7 @@ export default function PetWindow() {
     role: "system",
   });
   // 追踪实际窗口视口尺寸，防止任何情况下（如高 DPI / 旧窗口未重启）灵儿与环绕按钮被裁切
+  const [brainNote, setBrainNote] = useState<string | null>(null);
   const [viewport, setViewport] = useState(() => ({
     width: typeof window !== "undefined" ? window.innerWidth : 380,
     height: typeof window !== "undefined" ? window.innerHeight : 360,
@@ -374,9 +380,15 @@ export default function PetWindow() {
 
     const connect = () => {
       if (disposed) return;
-      try {
-        ws = new WebSocket(getEventsWebSocketUrl());
-        ws.onmessage = (event) => {
+      void (async () => {
+        try {
+          const socket = await openAuthedWebSocket("/ws/events");
+          if (disposed) {
+            socket.close();
+            return;
+          }
+          ws = socket;
+          ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data as string) as {
               type?: string;
@@ -423,16 +435,17 @@ export default function PetWindow() {
           }
         };
 
-        ws.onclose = () => {
+          ws.onclose = () => {
+            if (!disposed) {
+              reconnectTimer = window.setTimeout(connect, 5000);
+            }
+          };
+        } catch {
           if (!disposed) {
             reconnectTimer = window.setTimeout(connect, 5000);
           }
-        };
-      } catch {
-        if (!disposed) {
-          reconnectTimer = window.setTimeout(connect, 5000);
         }
-      }
+      })();
     };
 
     connect();
@@ -442,6 +455,34 @@ export default function PetWindow() {
       ws?.close();
     };
   }, [triggerEmotion]);
+
+  useEffect(() => {
+    let stopped = false;
+    const tick = async () => {
+      try {
+        await api.getHealth();
+        const models = await api.getModelStatus();
+        if (stopped) return;
+        if (models.downloading) setBrainNote("正在下载本地语音模型…");
+        else if (models.error) setBrainNote("语音模型下载失败");
+        else if (models.missing.length > 0) setBrainNote("本地语音模型还没准备好");
+        else setBrainNote(null);
+      } catch {
+        if (!stopped) setBrainNote("大脑还没连上");
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 4000);
+    const off = window.taiwanBotEnv?.onBackendStatus?.((status) => {
+      if (status.state === "ready") return;
+      setBrainNote(status.detail);
+    });
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      off?.();
+    };
+  }, []);
 
   // 订阅 Electron 主进程推送的菜单/表情同步/免打扰事件
   useEffect(() => {
@@ -672,25 +713,34 @@ export default function PetWindow() {
     setSending(true);
     triggerEmotion("thinking", 0);
 
-    try {
-      const res = await sendQuickChat(text, "normal");
-      setSending(false);
-
-      const isDnd = dndRef.current;
-      if (!isDnd && res.sentences.length > 0) {
-        void playTaiwanSentences(res.sentences, {
+    let emotion: PetEmotion = "happy";
+    const isDnd = dndRef.current;
+    const player = isDnd
+      ? null
+      : createSentencePlayer({
           muted: isDnd,
           signal: controller.signal,
           onStartSpeaking: () => triggerEmotion("speaking", 0),
-          onFinishSpeaking: () => triggerEmotion(res.emotion || "happy", 5000),
-        }).catch(() => {});
-      } else {
-        triggerEmotion(res.emotion || "happy", 5500);
-      }
+          onFinishSpeaking: () => triggerEmotion(emotion, 5000),
+        });
+    try {
+      const res = await sendQuickChat(text, "normal", "manual", {
+        signal: controller.signal,
+        onSentence: (sentence) => player?.push(sentence),
+        onReply: (reply) => {
+          emotion = reply.emotion || "happy";
+          setSending(false);
+        },
+      });
+      emotion = res.emotion || emotion;
+      setSending(false);
+      if (!player) triggerEmotion(emotion, 5500);
+      await player?.close();
     } catch {
       triggerEmotion("encouraging", 5000);
     } finally {
       setSending(false);
+      await player?.close();
     }
   };
 
@@ -771,8 +821,13 @@ export default function PetWindow() {
       ref={stageRef}
       onPointerMove={handleStagePointerMove}
       onPointerLeave={handleStagePointerLeave}
-      className="w-screen h-screen flex flex-col items-center justify-center bg-transparent overflow-hidden select-none"
+      className="relative w-screen h-screen flex flex-col items-center justify-center bg-transparent overflow-hidden select-none"
     >
+      {brainNote && (
+        <div className="absolute top-2 left-1/2 z-20 -translate-x-1/2 max-w-[240px] truncate rounded-full bg-white/92 px-2.5 py-1 text-[11px] text-slate-700 shadow pointer-events-none">
+          {brainNote}
+        </div>
+      )}
       <div
         className="flex flex-col items-center justify-start pt-1.5 px-1.5 gap-1.5 shrink-0"
         style={

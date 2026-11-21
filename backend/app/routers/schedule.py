@@ -11,6 +11,7 @@
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.core.local_auth import accept_authorized_websocket
 from app.schemas import DndToggleRequest, ScheduleSnoozeRequest, ScheduleTriggerRequest
 from app.services.event_bus import event_bus
 from app.services.scheduler_service import (
@@ -26,7 +27,9 @@ router = APIRouter(tags=["Schedule"])
 @router.websocket("/ws/events")
 async def websocket_events(websocket: WebSocket):
     """前端桌宠与主控面板的实时事件推送通道"""
-    await event_bus.connect(websocket)
+    if not await accept_authorized_websocket(websocket):
+        return
+    await event_bus.connect(websocket, already_accepted=True)
     try:
         # 首次连接后立即发送一条握手状态，便于前端确认在线
         await websocket.send_json(

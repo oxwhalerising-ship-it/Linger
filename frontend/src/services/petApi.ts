@@ -7,7 +7,7 @@
  */
 
 import type { PetEmotion } from "../types/pet";
-import { getBackendBaseUrl, requestJson } from "./api/client";
+import { buildAuthHeaders, getBackendBaseUrl } from "./api/client";
 
 export { getBackendBaseUrl };
 
@@ -42,20 +42,175 @@ export interface ChatResponseData {
   md_path: string;
 }
 
-/** 发送一轮对话给台湾腔小管家（自动带超时保护与 FastAPI detail 错误解析） */
+export interface ChatStreamHandlers {
+  signal?: AbortSignal;
+  onSentence?: (sentence: string, index: number) => void;
+  onReply?: (reply: {
+    reply: string;
+    sentences: string[];
+    emotion: PetEmotion;
+    duration_ms?: number | null;
+    used_offline_fallback: boolean;
+  }) => void;
+}
+
+/** 文字对话走 SSE：第一句出来就回调，归档结束才 resolve。 */
 export async function sendQuickChat(
   message: string,
   mode: ChatMode = "normal",
   triggerType: "manual" | "schedule" | "random" | "wakeword" = "manual",
+  handlers?: ChatStreamHandlers,
 ): Promise<ChatResponseData> {
-  return requestJson<ChatResponseData>(
-    "/api/chat",
-    {
+  const timeout = new AbortController();
+  const timer = window.setTimeout(() => timeout.abort(), 90_000);
+  const onAbort = () => timeout.abort();
+  handlers?.signal?.addEventListener("abort", onAbort);
+  try {
+    const headers = await buildAuthHeaders({
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    });
+    const res = await fetch(`${getBackendBaseUrl()}/api/chat/stream`, {
       method: "POST",
+      headers,
       body: JSON.stringify({ message, mode, trigger_type: triggerType }),
+      signal: timeout.signal,
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        if (body?.detail) detail = String(body.detail);
+      } catch {
+        // 非 JSON 错误体忽略
+      }
+      throw new Error(detail);
+    }
+    if (!res.body) {
+      throw new Error("对话流没有返回内容");
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let donePayload: ChatResponseData | null = null;
+
+    const handleBlock = (block: string) => {
+      let event = "message";
+      const dataLines: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+      }
+      if (dataLines.length === 0) return;
+      const data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+      if (event === "sentence" && typeof data.text === "string") {
+        handlers?.onSentence?.(data.text, Number(data.index ?? 0));
+      } else if (event === "reply") {
+        handlers?.onReply?.({
+          reply: String(data.reply ?? ""),
+          sentences: Array.isArray(data.sentences) ? data.sentences.map(String) : [],
+          emotion: (data.emotion as PetEmotion) || "happy",
+          duration_ms: typeof data.duration_ms === "number" ? data.duration_ms : null,
+          used_offline_fallback: Boolean(data.used_offline_fallback),
+        });
+      } else if (event === "error") {
+        throw new Error(String(data.detail || "对话中断了"));
+      } else if (event === "done") {
+        donePayload = data as unknown as ChatResponseData;
+      }
+    };
+
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      const blocks = buffer.split("\n\n");
+      buffer = blocks.pop() ?? "";
+      for (const block of blocks) {
+        if (block.trim()) handleBlock(block);
+      }
+    }
+    if (buffer.trim()) handleBlock(buffer);
+    if (!donePayload) {
+      throw new Error("对话还没说完就断开了");
+    }
+    return donePayload;
+  } finally {
+    window.clearTimeout(timer);
+    handlers?.signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+/** 边收句子边念。第一句到达就开始合成，不用等整段回复。 */
+export function createSentencePlayer(options: {
+  muted?: boolean;
+  rate?: string;
+  signal?: AbortSignal;
+  onStartSpeaking?: () => void;
+  onFinishSpeaking?: () => void;
+}): {
+  push: (sentence: string) => void;
+  close: () => Promise<void>;
+} {
+  const queue: string[] = [];
+  const waiters: Array<() => void> = [];
+  let closed = false;
+  let started = false;
+
+  const wake = () => {
+    const pending = waiters.splice(0);
+    pending.forEach((resolve) => resolve());
+  };
+
+  const takeBatch = async (): Promise<string[] | null> => {
+    while (queue.length === 0 && !closed) {
+      await new Promise<void>((resolve) => {
+        waiters.push(resolve);
+        if (queue.length > 0 || closed) {
+          const index = waiters.indexOf(resolve);
+          if (index >= 0) waiters.splice(index, 1);
+          resolve();
+        }
+      });
+    }
+    if (queue.length === 0) return null;
+    return queue.splice(0, queue.length);
+  };
+
+  const finished = (async () => {
+    try {
+      while (!options.signal?.aborted) {
+        const batch = await takeBatch();
+        if (!batch || batch.length === 0) break;
+        if (!started) {
+          started = true;
+          options.onStartSpeaking?.();
+        }
+        await playTaiwanSentences(batch, {
+          muted: options.muted,
+          rate: options.rate,
+          signal: options.signal,
+        });
+      }
+    } finally {
+      options.onFinishSpeaking?.();
+    }
+  })();
+
+  return {
+    push(sentence: string) {
+      const text = sentence.trim();
+      if (!text || options.signal?.aborted) return;
+      queue.push(text);
+      wake();
     },
-    60_000,
-  );
+    close() {
+      closed = true;
+      wake();
+      return finished;
+    },
+  };
 }
 
 /** 播放 0.3 秒本地缓存的台湾腔反应垫词（例如「嗯嗯～」），让等待 LLM 回复时也有活人感 */
@@ -65,9 +220,15 @@ export async function playFillerSound(
 ): Promise<void> {
   if (signal?.aborted) return;
   try {
-    const url = `${getBackendBaseUrl()}/api/voice/fillers/${fillerId}`;
+    const headers = await buildAuthHeaders();
+    const res = await fetch(`${getBackendBaseUrl()}/api/voice/fillers/${fillerId}`, {
+      headers,
+      signal,
+    });
+    if (!res.ok) return;
+    const blobUrl = URL.createObjectURL(await res.blob());
     await new Promise<void>((resolve) => {
-      const audio = new Audio(url);
+      const audio = new Audio(blobUrl);
       let settled = false;
       const onAbort = () => {
         audio.pause();
@@ -79,6 +240,7 @@ export async function playFillerSound(
         signal?.removeEventListener("abort", onAbort);
         audio.onended = null;
         audio.onerror = null;
+        URL.revokeObjectURL(blobUrl);
         resolve();
       };
       if (signal) {
@@ -148,7 +310,7 @@ export async function playTaiwanSentences(
 
     const res = await fetch(`${baseUrl}/api/voice/tts`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await buildAuthHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         text,
         provider: options?.provider,
@@ -183,7 +345,7 @@ export async function playTaiwanSentences(
       actualProvider !== "fish_audio"
     ) {
       throw new Error(
-        "当前 8765 端口运行的是旧版后端（仍在用 Edge-TTS），请关闭旧窗口后重新双击 start_taiwanbot.bat",
+        "当前 8765 端口运行的是旧版后端（仍在用 Edge-TTS），请关闭旧窗口后重新双击 start_linger.bat",
       );
     }
 

@@ -822,10 +822,8 @@ export default function VoiceCallOverlay({
           {readyInfo
             ? `${
                 readyInfo.sttEngine === "sherpa-onnx"
-                  ? "阿里 SenseVoice + 自动纠错"
-                  : readyInfo.sttEngine === "faster-whisper"
-                    ? "本地 Faster-Whisper + 自动纠错"
-                    : readyInfo.sttEngine
+                  ? "SenseVoice Small + 自动纠错"
+                  : readyInfo.sttEngine
               } + ${readyInfo.ttsProvider === "fish_audio" ? "Fish Audio 台湾腔" : "Edge-TTS 台湾腔"}`
             : "准备通话引擎中..."}
         </p>
