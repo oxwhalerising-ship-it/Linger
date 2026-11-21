@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type WakewordStatusData } from "../../services/api";
+import { openAuthedWebSocket } from "../../services/api/client";
 import Switch from "../ui/Switch";
 
 export default function WakewordCard({
@@ -43,6 +44,43 @@ export default function WakewordCard({
     void loadStatus();
   }, [loadStatus]);
 
+  useEffect(() => {
+    let disposed = false;
+    let ws: WebSocket | null = null;
+    let timer = 0;
+    const connect = () => {
+      void (async () => {
+        try {
+          const socket = await openAuthedWebSocket("/ws/events");
+          if (disposed) {
+            socket.close();
+            return;
+          }
+          ws = socket;
+          ws.onmessage = (event) => {
+            try {
+              const msg = JSON.parse(String(event.data)) as { type?: string };
+              if (msg.type === "dnd_changed") void loadStatus();
+            } catch {
+              // 忽略无法解析的推送
+            }
+          };
+          ws.onclose = () => {
+            if (!disposed) timer = window.setTimeout(connect, 5000);
+          };
+        } catch {
+          if (!disposed) timer = window.setTimeout(connect, 5000);
+        }
+      })();
+    };
+    connect();
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+      ws?.close();
+    };
+  }, [loadStatus]);
+
   const handleToggleWakeword = async (nextEnabled: boolean) => {
     setBusy(true);
     try {
@@ -51,6 +89,10 @@ export default function WakewordCard({
         keyword.trim() || "灵儿",
       );
       setStatus(updated);
+      if (updated.blocked_by_dnd) {
+        onToast("免打扰开着，语音唤醒保持关闭。先关掉免打扰才能再打开。");
+        return;
+      }
       if (nextEnabled && !updated.ready) {
         onToast("唤醒词已保存，完善本地 KWS 依赖与模型后即可开启纯离线监听");
       } else if (nextEnabled && !updated.listening) {
@@ -77,6 +119,10 @@ export default function WakewordCard({
     setBusy(true);
     try {
       const res = await api.simulateWakeword();
+      if (!res.triggered && res.reason === "dnd_enabled") {
+        onToast("免打扰开着，语音唤醒已关闭");
+        return;
+      }
       onToast(
         res.delivered_clients > 0
           ? "已模拟命中唤醒词！桌宠已自动点亮并进入倾听态～"
@@ -123,7 +169,7 @@ export default function WakewordCard({
             {status?.listening ? "离线监听中" : "启用纯本地离线唤醒"}
           </div>
           <div className="text-[12px] text-[var(--text-tertiary)] mt-0.5">
-            仅在本地内存中持续检测唤醒词，未命中前不会上传或保存任何音频
+            仅在本地内存中持续检测唤醒词。开启免打扰后这里会一起关闭，期间不能重新打开
           </div>
         </div>
         <Switch

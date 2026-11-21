@@ -7,6 +7,25 @@ echo   正在启动灵儿的本地大脑和桌面浮窗...
 echo   关闭本窗口会同时停下前后端
 echo ==================================================
 
+REM 若当前 PATH 中找不到 npm（例如 nvm 软链异常），自动探测本机 Node.js 安装目录
+where npm >nul 2>&1
+if errorlevel 1 (
+    if exist "E:\npm.cmd" (
+        set "PATH=E:\;%PATH%"
+    ) else if exist "C:\Program Files\nodejs\npm.cmd" (
+        set "PATH=C:\Program Files\nodejs;%PATH%"
+    ) else if exist "%LOCALAPPDATA%\Programs\nodejs\npm.cmd" (
+        set "PATH=%LOCALAPPDATA%\Programs\nodejs;%PATH%"
+    )
+)
+
+where npm >nul 2>&1
+if errorlevel 1 (
+    echo [错误] 未找到 Node.js / npm，请检查系统环境变量 PATH 或重新安装 Node.js。
+    pause
+    exit /b 1
+)
+
 REM 清掉占用 8765 的旧后端，避免桌宠连到没有令牌的旧进程
 "%~dp0backend\.venv\Scripts\python.exe" "%~dp0backend\cleanup_port.py" >nul 2>&1
 

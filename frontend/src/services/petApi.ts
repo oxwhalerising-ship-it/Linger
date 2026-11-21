@@ -20,6 +20,8 @@ export type ChatMode =
   | "random_bubble";
 
 export interface ChatResponseData {
+  archive_failed?:boolean;
+  source_id?:number;
   date: string;
   reply: string;
   sentences: string[];
@@ -27,6 +29,7 @@ export interface ChatResponseData {
   duration_ms?: number | null;
   used_offline_fallback: boolean;
   extracted: {
+    summary_updated?:boolean;
     habit_updates?: Array<{
       habit_id: number;
       title: string;
@@ -43,6 +46,7 @@ export interface ChatResponseData {
 }
 
 export interface ChatStreamHandlers {
+  threadId?:string;
   signal?: AbortSignal;
   onSentence?: (sentence: string, index: number) => void;
   onReply?: (reply: {
@@ -73,7 +77,7 @@ export async function sendQuickChat(
     const res = await fetch(`${getBackendBaseUrl()}/api/chat/stream`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ message, mode, trigger_type: triggerType }),
+      body: JSON.stringify({ message, mode, trigger_type: triggerType, thread_id:handlers?.threadId }),
       signal: timeout.signal,
     });
     if (!res.ok) {

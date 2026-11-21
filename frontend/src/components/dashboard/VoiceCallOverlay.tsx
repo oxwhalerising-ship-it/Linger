@@ -48,7 +48,7 @@ interface CallSubtitleItem {
 interface VoiceCallOverlayProps {
   mode: ChatMode;
   voiceRate: string;
-  onModeChange: (nextMode: ChatMode) => void;
+  threadId?: string;
   onTurnCommitted: (turn: CommittedVoiceTurn) => void;
   onArchiveUpdate: (payload: {
     turnId: number;
@@ -67,7 +67,7 @@ function formatCallElapsed(totalSec: number): string {
 export default function VoiceCallOverlay({
   mode,
   voiceRate,
-  onModeChange,
+  threadId,
   onTurnCommitted,
   onArchiveUpdate,
   onClose,
@@ -299,7 +299,7 @@ export default function VoiceCallOverlay({
     engineRef.current = engine;
     void engine
       .start({
-        mode: initialModeRef.current,
+        mode: initialModeRef.current, threadId,
         rate: initialRateRef.current,
         bargeInEnabled: bargeInRef.current,
         manualCommitMode: manualCommitRef.current,
@@ -539,31 +539,6 @@ export default function VoiceCallOverlay({
 
         {/* 右侧：场景快速切换 + 端到端首音延迟监控 + 字幕显示开关 */}
         <div className="flex items-center gap-2 shrink-0">
-          <div className="inline-flex p-0.5 rounded-full bg-[var(--bg-subtle)] border border-[var(--border-subtle)]">
-            {(
-              [
-                { id: "normal", label: "白天随聊" },
-                { id: "evening_review", label: "晚间复盘" },
-              ] as const
-            ).map((opt) => {
-              const active = mode === opt.id;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => onModeChange(opt.id)}
-                  className={`px-2.5 py-1 rounded-full text-[11.5px] font-medium transition-colors cursor-pointer ${
-                    active
-                      ? "bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-xs"
-                      : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-
           {lastLatency && (
             <Tooltip
               label={`语音识别 ${lastLatency.sttMs}ms · 首字生成 ${lastLatency.llmFirstTokenMs}ms · 首句出声 ${lastLatency.firstAudioMs}ms`}
@@ -824,7 +799,7 @@ export default function VoiceCallOverlay({
                 readyInfo.sttEngine === "sherpa-onnx"
                   ? "SenseVoice Small + 自动纠错"
                   : readyInfo.sttEngine
-              } + ${readyInfo.ttsProvider === "fish_audio" ? "Fish Audio 台湾腔" : "Edge-TTS 台湾腔"}`
+              } + ${readyInfo.ttsProvider === "fish_audio" ? "Fish Audio" : "Edge-TTS"}`
             : "准备通话引擎中..."}
         </p>
       </footer>

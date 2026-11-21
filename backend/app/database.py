@@ -238,6 +238,40 @@ def init_db() -> None:
             """
         )
 
+        if "archive_result" not in msg_cols:
+            cur.execute("ALTER TABLE messages ADD COLUMN archive_result TEXT")
+        if "reply_to" not in msg_cols:
+            cur.execute("ALTER TABLE messages ADD COLUMN reply_to INTEGER REFERENCES messages(id) ON DELETE SET NULL")
+        if "thread_id" not in msg_cols:
+            cur.execute("ALTER TABLE messages ADD COLUMN thread_id TEXT")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id,id)")
+        if "source_message_id" not in {r["name"] for r in cur.execute("PRAGMA table_info(memories)")}:
+            cur.execute("ALTER TABLE memories ADD COLUMN source_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL")
+
+        # Keep favorites attached to individual occurrences, including repeated text.
+        cur.execute("""CREATE TABLE IF NOT EXISTS highlights (
+            id INTEGER PRIMARY KEY, date TEXT NOT NULL, content TEXT NOT NULL,
+            occurrence INTEGER NOT NULL, favorite INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(date,content,occurrence))""")
+        entries = """SELECT key AS position, value AS content, row_number() OVER (
+            PARTITION BY value ORDER BY CAST(key AS INTEGER)) AS occurrence
+            FROM json_each(NEW.highlights)"""
+        for operation in ("INSERT", "UPDATE OF highlights"):
+            trigger = "new" if operation == "INSERT" else "edit"
+            cur.execute(f"""CREATE TRIGGER IF NOT EXISTS sync_highlights_{trigger}
+                AFTER {operation} ON daily_logs BEGIN
+                DELETE FROM highlights WHERE date=NEW.date AND (content,occurrence)
+                    NOT IN (SELECT content,occurrence FROM ({entries}));
+                INSERT OR IGNORE INTO highlights(date,content,occurrence)
+                    SELECT NEW.date,e.content,e.occurrence FROM ({entries}) e
+                    WHERE NOT EXISTS (SELECT 1 FROM highlights h WHERE h.date=NEW.date
+                        AND h.content=e.content AND h.occurrence=e.occurrence) ORDER BY e.position;
+                END""")
+        cur.execute("""INSERT OR IGNORE INTO highlights(date,content,occurrence)
+            SELECT d.date,j.value,row_number() OVER (
+                PARTITION BY d.date,j.value ORDER BY CAST(j.key AS INTEGER))
+            FROM daily_logs d,json_each(d.highlights) j ORDER BY d.date,CAST(j.key AS INTEGER)""")
+
         # 7. 周报与月报分析表
         cur.execute(
             """
@@ -271,6 +305,53 @@ def init_db() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_reports_period_id
             ON reports (period_type, id);
+            """
+        )
+
+        # 一次性任务。重复的事走 habits，避免和打卡混成一份清单。
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                notes TEXT NOT NULL DEFAULT '',
+                important INTEGER NOT NULL DEFAULT 0,
+                due_date TEXT,
+                status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done')),
+                completed_at TEXT,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_tasks_status_due
+            ON tasks (status, due_date, important, id);
+            """
+        )
+
+        # 番茄钟完成记录。client_id 让中断后的重试不会记成两次。
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS focus_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id TEXT NOT NULL UNIQUE,
+                task_id INTEGER,
+                kind TEXT NOT NULL CHECK (kind IN ('focus', 'break')),
+                planned_seconds INTEGER NOT NULL,
+                actual_seconds INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT NOT NULL,
+                session_date TEXT NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 1,
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_focus_sessions_date
+            ON focus_sessions (session_date, id);
             """
         )
 

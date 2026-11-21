@@ -8,7 +8,7 @@
 import json
 import re
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import Body, APIRouter, HTTPException, Query
 
 from app.database import db_cursor
 from app.schemas import DailyLogOut, DailyLogUpsert, HabitRecordOut, HabitRecordUpsert
@@ -213,3 +213,31 @@ def record_daily_habit(date_str: str, payload: HabitRecordUpsert):
 
     md_path, md_content = export_daily_markdown(canonical)
     return _build_daily_log_response(canonical, md_path, md_content)
+
+@router.get("/highlights/list")
+def list_highlights(month: str):
+    month = _validate_month(month)
+    with db_cursor() as cur:
+        return [dict(r) for r in cur.execute(
+            "SELECT id,date,content,favorite FROM highlights WHERE date LIKE ? ORDER BY date DESC,id",
+            (month + "-%",))]
+
+@router.put("/highlights/{highlight_id}/favorite")
+def favorite_highlight(highlight_id: int, favorite: bool):
+    with db_cursor() as cur:
+        if not cur.execute("UPDATE highlights SET favorite=? WHERE id=?", (int(favorite), highlight_id)).rowcount:
+            raise HTTPException(404, "条目已删除")
+    return {"favorite": favorite}
+
+@router.post("/{date_str}/highlights")
+def append_highlight(date_str: str, content: str = Body(embed=True, min_length=1, max_length=2000)):
+    canonical = _validate_date(date_str)
+    if not content.strip():
+        raise HTTPException(422, "请输入内容")
+    with db_cursor() as cur:
+        cur.execute("""INSERT INTO daily_logs(date,highlights,updated_at) VALUES (?,json_array(?),?)
+            ON CONFLICT(date) DO UPDATE SET highlights=json_insert(daily_logs.highlights,'$[#]',?),
+            updated_at=excluded.updated_at""",
+            (canonical,content.strip(),datetime.now().isoformat(timespec="seconds"),content.strip()))
+    path, md = export_daily_markdown(canonical)
+    return _build_daily_log_response(canonical,path,md)

@@ -6,8 +6,11 @@
 - GET `/api/schedule/status`：查询所有已注册作息任务与下次触发时间
 - POST `/api/schedule/trigger`：模拟触发指定作息节点或随机冒泡（方便体验与验收）
 - POST `/api/schedule/snooze`：点击「稍后再聊（15 分钟后）」延后提醒
-- POST `/api/schedule/dnd`：一键切换免打扰开关并实时通知前端
+- POST `/api/schedule/dnd`：一键切换免打扰开关并实时通知前端。
+  开启免打扰时同时关闭离线语音唤醒。
 """
+
+import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -20,6 +23,7 @@ from app.services.scheduler_service import (
     snooze_proactive_event,
     trigger_proactive_event,
 )
+from app.services.wakeword_service import wakeword_engine
 
 router = APIRouter(tags=["Schedule"])
 
@@ -72,12 +76,23 @@ def snooze_nudge(payload: ScheduleSnoozeRequest):
 
 @router.post("/api/schedule/dnd")
 async def toggle_dnd(payload: DndToggleRequest):
-    """一键切换免打扰模式，并通过 WebSocket 同步给桌宠与面板"""
+    """一键切换免打扰模式，并通过 WebSocket 同步给桌宠与面板。
+
+    一旦开启免打扰，离线唤醒会一起关掉并停止听麦克风。
+    关闭免打扰不会把唤醒自动打开，需要用户再手动开启。
+    """
     cfg = set_dnd_enabled(payload.enabled)
+    if payload.enabled:
+        loop = asyncio.get_running_loop()
+        await asyncio.to_thread(wakeword_engine.toggle, False, None, loop)
     await event_bus.broadcast(
         {
             "type": "dnd_changed",
             "enabled": bool(cfg["dnd_enabled"]),
+            "wakeword_disabled": bool(payload.enabled),
         }
     )
-    return {"dnd_enabled": bool(cfg["dnd_enabled"])}
+    return {
+        "dnd_enabled": bool(cfg["dnd_enabled"]),
+        "wakeword_disabled": bool(payload.enabled),
+    }

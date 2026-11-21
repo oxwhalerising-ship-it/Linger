@@ -63,7 +63,7 @@ def _schedule_markdown_export(date_str: str) -> str:
     return md_path
 
 
-def _load_daily_context(date_str: str) -> dict[str, Any]:
+def _load_daily_context(date_str: str, thread_id: str | None = None) -> dict[str, Any]:
     """收集当日习惯清单、打卡状态、复盘记录、近期对话与长期记忆"""
     with db_cursor() as cur:
         # 1. 启用中的习惯及当日已记录状态
@@ -91,11 +91,11 @@ def _load_daily_context(date_str: str) -> dict[str, Any]:
         cur.execute(
             """
             SELECT role, content FROM messages
-            WHERE session_date = ?
+            WHERE (thread_id = ? OR (thread_id IS NULL AND ? IS NULL AND session_date = ?))
             ORDER BY id DESC
             LIMIT 12;
             """,
-            (date_str,),
+            (thread_id, thread_id, date_str),
         )
         recent_messages = list(reversed([dict(r) for r in cur.fetchall()]))
 
@@ -257,7 +257,7 @@ def _parse_llm_json(raw_text: str) -> dict[str, Any]:
     }
 
 
-def _apply_extracted_updates(date_str: str, extracted: dict[str, Any]) -> dict[str, Any]:
+def _apply_extracted_updates(date_str: str, extracted: dict[str, Any], source_message_id: int | None = None) -> dict[str, Any]:
     """将 Agent 静默提取的习惯状态、复盘摘要、小确幸与长期记忆持久化到 SQLite，并刷新 Markdown"""
     now_iso = datetime.now().isoformat(timespec="seconds")
     applied = {
@@ -273,6 +273,13 @@ def _apply_extracted_updates(date_str: str, extracted: dict[str, Any]) -> dict[s
         return {"applied": applied, "md_path": md_path}
 
     with db_cursor() as cur:
+        if source_message_id is not None:
+            cur.execute("BEGIN IMMEDIATE")
+            row = cur.execute("SELECT archive_result FROM messages WHERE id=?", (source_message_id,)).fetchone()
+            if row is None:
+                return {"applied": applied, "md_path": ""}
+            if row["archive_result"] is not None:
+                return {"applied": json.loads(row["archive_result"]), "md_path": ""}
         # 1. 更新习惯打卡记录（校验 habit_id 合法性）
         for item in extracted.get("habit_updates") or []:
             habit_id = item.get("habit_id")
@@ -362,6 +369,7 @@ def _apply_extracted_updates(date_str: str, extracted: dict[str, Any]) -> dict[s
                     date_str,
                 ),
             )
+            applied["summary_updated"] = merged_summary != old_summary
             applied["mood_score"] = mood_score
             applied["energy_score"] = energy_score
             applied["new_highlights"] = actually_added_highlights
@@ -375,12 +383,16 @@ def _apply_extracted_updates(date_str: str, extracted: dict[str, Any]) -> dict[s
                 continue
             cur.execute(
                 """
-                INSERT INTO memories (memory_type, content, follow_up_date, is_resolved, created_at)
-                VALUES (?, ?, ?, 0, ?);
+                INSERT INTO memories (source_message_id, memory_type, content, follow_up_date, is_resolved, created_at)
+                VALUES (?, ?, ?, ?, 0, ?);
                 """,
-                (m_type, content, follow_up, now_iso),
+                (source_message_id, m_type, content, follow_up, now_iso),
             )
             applied["new_memories"].append({"memory_type": m_type, "content": content})
+
+        if source_message_id is not None:
+            cur.execute("UPDATE messages SET archive_result=? WHERE id=?",
+                        (json.dumps(applied,ensure_ascii=False),source_message_id))
 
     # 4. 后台异步刷新本地 Markdown 复盘日记，避免写盘阻塞对话响应
     md_path = _schedule_markdown_export(date_str)
@@ -401,7 +413,7 @@ def _offline_fallback_response(user_message: str, ctx: dict[str, Any], mode: str
             habit_updates.append({"habit_id": h["id"], "status": "done", "note": "离线体验模式关键词识别"})
 
     if mode == "evening_review" and pending:
-        pending_names = "、".join(h["title"] for h in pending[:3])
+        pending_names = pending[0]["title"]
         reply = (
             f"欸～现在是晚间复盘时间啰！我帮你看了一下，今天还有「{pending_names}」还没记录到捏，"
             f"要不要跟我说说真实情况呀？（偷偷提醒：去设置页填上 API Key，{bot_name}就能开启完整聪明大脑陪你聊喔～）"
@@ -431,6 +443,7 @@ def run_agent_chat(
     date_str: str | None = None,
     mode: str = "normal",
     trigger_type: str = "manual",
+    thread_id: str | None = None,
 ) -> dict[str, Any]:
     """
     执行一轮完整的台湾腔小管家对话：
@@ -447,17 +460,18 @@ def run_agent_chat(
     base_url = (llm_cfg.get("base_url") or "https://generativelanguage.googleapis.com/v1beta/openai/").strip()
     model_name = (llm_cfg.get("model") or "gemini-2.5-flash").strip()
 
-    ctx = _load_daily_context(today_str)
+    ctx = _load_daily_context(today_str, thread_id)
 
     # 先把用户发言写入对话历史表（明确标记 channel='text'）
     with db_cursor() as cur:
         cur.execute(
             """
-            INSERT INTO messages (session_date, channel, role, content, trigger_type, created_at)
-            VALUES (?, 'text', 'user', ?, ?, ?);
+            INSERT INTO messages (thread_id, session_date, channel, role, content, trigger_type, created_at)
+            VALUES (?, ?, 'text', 'user', ?, ?, ?);
             """,
-            (today_str, user_message, trigger_type, now_iso),
+            (thread_id, today_str, user_message, trigger_type, now_iso),
         )
+        source_id = cur.lastrowid
 
     # 若未填写 API Key，走本地台湾腔演示兜底，避免直接报错
     used_fallback = False
@@ -515,14 +529,14 @@ def run_agent_chat(
     with db_cursor() as cur:
         cur.execute(
             """
-            INSERT INTO messages (session_date, channel, role, content, trigger_type, created_at, duration_ms)
-            VALUES (?, 'text', 'assistant', ?, ?, ?, ?);
+            INSERT INTO messages (reply_to, thread_id, session_date, channel, role, content, trigger_type, created_at, duration_ms)
+            VALUES (?, ?, ?, 'text', 'assistant', ?, ?, ?, ?);
             """,
-            (today_str, reply_text, trigger_type, reply_iso, duration_ms),
+            (source_id, thread_id, today_str, reply_text, trigger_type, reply_iso, duration_ms),
         )
 
     # 执行静默归档与后台 Markdown 同步
-    archive_result = _apply_extracted_updates(today_str, parsed.get("extracted") or {})
+    archive_result = _apply_extracted_updates(today_str, parsed.get("extracted") or {}, source_id)
 
     # 直接在内存中扣减刚记录的习惯，省去一次重复的 5 表查库
     updated_habit_ids = {
@@ -597,6 +611,7 @@ def _build_voice_call_system_prompt(
 
 ## 当前日期（{date_str}）与场景
 {mode_hint}
+若用户请你复盘或正在回答上一项复盘提问，每轮只核对一项尚未确认的习惯；用户换话题时，直接回应新话题。
 
 ## 用户今日习惯状态（仅供聊天参考，顺口提到即可）
 {habits_block}
@@ -624,6 +639,7 @@ async def stream_voice_call_reply(
     user_message: str,
     date_str: str | None = None,
     mode: str = "normal",
+    thread_id: str | None = None,
 ) -> AsyncIterator[str]:
     """
     主轨极速流式对话生成器：
@@ -637,7 +653,7 @@ async def stream_voice_call_reply(
     base_url = (llm_cfg.get("base_url") or "https://generativelanguage.googleapis.com/v1beta/openai/").strip()
     model_name = (llm_cfg.get("model") or "gemini-2.5-flash").strip()
 
-    ctx = _load_daily_context(today_str)
+    ctx = _load_daily_context(today_str, thread_id)
 
     if not api_key:
         fallback = _offline_fallback_response(user_message, ctx, mode, bot_name)
@@ -675,26 +691,30 @@ def save_voice_call_messages(
     user_message: str,
     assistant_reply: str,
     duration_ms: int | None = None,
-) -> None:
+    thread_id: str | None = None,
+) -> int | None:
     """将语音通话的本轮问答即时持久化至 SQLite messages 表（明确标记 channel='voice'）"""
     now_iso = datetime.now().isoformat(timespec="seconds")
+    source_id = None
     with db_cursor() as cur:
         if user_message.strip():
             cur.execute(
                 """
-                INSERT INTO messages (session_date, channel, role, content, trigger_type, created_at)
-                VALUES (?, 'voice', 'user', ?, 'voice_call', ?);
+                INSERT INTO messages (thread_id, session_date, channel, role, content, trigger_type, created_at)
+                VALUES (?, ?, 'voice', 'user', ?, 'voice_call', ?);
                 """,
-                (date_str, user_message.strip(), now_iso),
+                (thread_id, date_str, user_message.strip(), now_iso),
             )
+            source_id = cur.lastrowid
         if assistant_reply.strip():
             cur.execute(
                 """
-                INSERT INTO messages (session_date, channel, role, content, trigger_type, created_at, duration_ms)
-                VALUES (?, 'voice', 'assistant', ?, 'voice_call', ?, ?);
+                INSERT INTO messages (reply_to, thread_id, session_date, channel, role, content, trigger_type, created_at, duration_ms)
+                VALUES (?, ?, ?, 'voice', 'assistant', ?, 'voice_call', ?, ?);
                 """,
-                (date_str, assistant_reply.strip(), now_iso, duration_ms),
+                (source_id, thread_id, date_str, assistant_reply.strip(), now_iso, duration_ms),
             )
+    return source_id
 
 
 async def archive_voice_call_turn_async(
@@ -702,6 +722,8 @@ async def archive_voice_call_turn_async(
     user_message: str,
     assistant_reply: str,
     mode: str = "normal",
+    thread_id: str | None = None,
+    source_message_id: int | None = None,
 ) -> dict[str, Any]:
     """
     副轨后台静默归档（完全不阻塞语音通话延迟）：
@@ -713,7 +735,7 @@ async def archive_voice_call_turn_async(
     base_url = (llm_cfg.get("base_url") or "https://generativelanguage.googleapis.com/v1beta/openai/").strip()
     model_name = (llm_cfg.get("model") or "gemini-2.5-flash").strip()
 
-    ctx = _load_daily_context(date_str)
+    ctx = _load_daily_context(date_str, thread_id)
     extracted: dict[str, Any] = {}
 
     if not api_key:
@@ -762,8 +784,8 @@ async def archive_voice_call_turn_async(
             completion = await _create_async_completion_fast(
                 client, base_kwargs, base_url, model_name
             )
-        except Exception:
-            return {"tags": [], "pending_habits": []}
+        except Exception as exc:
+            raise RuntimeError("归档服务暂时不可用") from exc
 
         raw = (completion.choices[0].message.content or "").strip()
         fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
@@ -771,12 +793,13 @@ async def archive_voice_call_turn_async(
             raw = fence_match.group(1)
         try:
             parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                extracted = parsed
-        except json.JSONDecodeError:
-            extracted = {}
+            if not isinstance(parsed, dict):
+                raise ValueError("归档响应格式无效")
+            extracted = parsed
+        except json.JSONDecodeError as exc:
+            raise ValueError("归档响应格式无效") from exc
 
-    archive_result = _apply_extracted_updates(date_str, extracted)
+    archive_result = _apply_extracted_updates(date_str, extracted, source_message_id)
     applied = archive_result["applied"]
     tags: list[str] = []
     if applied.get("habit_updates"):
@@ -806,26 +829,30 @@ def save_text_chat_messages(
     assistant_reply: str,
     trigger_type: str = "manual",
     duration_ms: int | None = None,
-) -> None:
+    thread_id: str | None = None,
+) -> int | None:
     """把一轮文字对话写入 messages，渠道固定为 text。"""
     now_iso = datetime.now().isoformat(timespec="seconds")
+    source_id = None
     with db_cursor() as cur:
         if user_message.strip():
             cur.execute(
                 """
-                INSERT INTO messages (session_date, channel, role, content, trigger_type, created_at)
-                VALUES (?, 'text', 'user', ?, ?, ?);
+                INSERT INTO messages (thread_id, session_date, channel, role, content, trigger_type, created_at)
+                VALUES (?, ?, 'text', 'user', ?, ?, ?);
                 """,
-                (date_str, user_message.strip(), trigger_type, now_iso),
+                (thread_id, date_str, user_message.strip(), trigger_type, now_iso),
             )
+            source_id = cur.lastrowid
         if assistant_reply.strip():
             cur.execute(
                 """
-                INSERT INTO messages (session_date, channel, role, content, trigger_type, created_at, duration_ms)
-                VALUES (?, 'text', 'assistant', ?, ?, ?, ?);
+                INSERT INTO messages (reply_to, thread_id, session_date, channel, role, content, trigger_type, created_at, duration_ms)
+                VALUES (?, ?, ?, 'text', 'assistant', ?, ?, ?, ?);
                 """,
-                (date_str, assistant_reply.strip(), trigger_type, now_iso, duration_ms),
+                (source_id, thread_id, date_str, assistant_reply.strip(), trigger_type, now_iso, duration_ms),
             )
+    return source_id
 
 
 async def iter_text_chat_events(
@@ -833,6 +860,7 @@ async def iter_text_chat_events(
     date_str: str | None = None,
     mode: str = "normal",
     trigger_type: str = "manual",
+    thread_id: str | None = None,
 ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     """
     文字对话的首句抢跑。
@@ -860,7 +888,7 @@ async def iter_text_chat_events(
         return events
 
     try:
-        async for delta in stream_voice_call_reply(user_message, today_str, mode):
+        async for delta in stream_voice_call_reply(user_message, today_str, mode, thread_id=thread_id):
             parts.append(delta)
             for event in take(splitter.feed(delta)):
                 yield event
@@ -869,7 +897,7 @@ async def iter_text_chat_events(
     except Exception as exc:
         reply = "".join(parts).strip()
         if reply:
-            save_text_chat_messages(today_str, user_message, reply, trigger_type)
+            save_text_chat_messages(today_str, user_message, reply, trigger_type, thread_id=thread_id)
         yield ("error", {"detail": redact_secrets(str(exc))[:300] or "对话中断了"})
         return
 
@@ -884,7 +912,7 @@ async def iter_text_chat_events(
     if emotion not in ("happy", "encouraging", "thinking", "sleepy", "listening", "idle"):
         emotion = "happy"
     duration_ms = max(1, round((time.perf_counter() - started) * 1000))
-    save_text_chat_messages(today_str, user_message, reply, trigger_type, duration_ms)
+    source_id = save_text_chat_messages(today_str, user_message, reply, trigger_type, duration_ms, thread_id=thread_id)
 
     reply_payload = {
         "date": today_str,
@@ -903,16 +931,20 @@ async def iter_text_chat_events(
         "new_highlights": [],
         "new_memories": [],
     }
+    archive_failed = False
     try:
-        archive = await archive_voice_call_turn_async(today_str, user_message, reply, mode)
+        archive = await archive_voice_call_turn_async(today_str, user_message, reply, mode, thread_id=thread_id, source_message_id=source_id)
     except Exception as exc:
         logger.warning("文字对话归档失败: %s", redact_secrets(str(exc))[:300])
+        archive_failed = True
         archive = {"applied": empty_applied, "pending_habits": [], "md_path": ""}
 
     yield (
         "done",
         {
             **reply_payload,
+            "source_id": source_id,
+            "archive_failed": archive_failed,
             "extracted": archive.get("applied") or empty_applied,
             "pending_habits": archive.get("pending_habits") or [],
             "md_path": archive.get("md_path") or "",

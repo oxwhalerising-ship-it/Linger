@@ -58,7 +58,11 @@ export default function ScheduleCard({
       await api.toggleDnd(next);
       setSchedule({ ...schedule, dnd_enabled: next });
       await loadStatus();
-      onToast(next ? "已开启免打扰模式（静音）" : "已关闭免打扰模式");
+      onToast(
+        next
+          ? "已开启免打扰，语音唤醒也已关闭"
+          : "已关闭免打扰。语音唤醒需要再手动打开",
+      );
     } catch {
       onToast("切换免打扰失败");
     }
@@ -134,7 +138,7 @@ export default function ScheduleCard({
             免打扰模式
           </div>
           <div className="text-[12px] text-[var(--text-tertiary)] mt-0.5">
-            开启后暂停一切主动语音与冒泡提醒，保持安静专注
+            开启后暂停主动提醒，并关闭语音唤醒。免打扰期间唤醒保持关闭
           </div>
         </div>
         <Switch

@@ -87,6 +87,7 @@ const ECHO_TAIL_SETTLE_MS = 180; // 播放结束后短暂等待房间混响散�
 
 export class VoiceCallEngine {
   private callbacks: VoiceCallCallbacks;
+  private threadId?: string;
   private mode: ChatMode = "normal";
   private rate = "+25%";
 
@@ -147,12 +148,14 @@ export class VoiceCallEngine {
 
   /** 启动一对一实时语音通话：同时初始化常驻麦克风、无缝播放引擎并建立 WebSocket */
   async start(options: {
+    threadId?: string;
     mode: ChatMode;
     rate: string;
     bargeInEnabled?: boolean;
     manualCommitMode?: boolean;
   }): Promise<void> {
     this.mode = options.mode;
+    this.threadId = options.threadId;
     this.rate = options.rate;
     this.bargeInEnabled = options.bargeInEnabled ?? true;
     this.manualCommitMode = options.manualCommitMode ?? true;
@@ -275,6 +278,7 @@ export class VoiceCallEngine {
         ws.send(
           JSON.stringify({
             type: "start_call",
+            thread_id: this.threadId,
             mode: this.mode,
             rate: this.rate,
             play_greeting: true,

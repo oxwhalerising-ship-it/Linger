@@ -90,6 +90,7 @@ class MemoryCreate(BaseModel):
 
 
 class MemoryOut(BaseModel):
+    source_message_id: Optional[int] = None
     """长期记忆返回结构"""
     id: int
     memory_type: Literal["preference", "ongoing_event", "highlight"]
@@ -109,6 +110,7 @@ class SettingsUpdate(BaseModel):
 # ==================== 对话与台湾腔语音（Chat & Voice） ====================
 
 class ChatRequest(BaseModel):
+    thread_id: Optional[str] = Field(default=None, max_length=80)
     """发送一轮对话给台湾腔小管家的请求体"""
     message: str = Field(..., min_length=1, max_length=2000, description="用户说的话或输入的文字")
     date: Optional[str] = Field(default=None, description="指定日期 YYYY-MM-DD，默认今天")
@@ -209,4 +211,93 @@ class WakewordToggleRequest(BaseModel):
     """开启/关闭本地离线语音唤醒及自定义中文唤醒词"""
     enabled: bool
     keyword: Optional[str] = Field(default=None, min_length=1, max_length=20, description="自定义中文唤醒词，如：灵儿")
+
+
+# ==================== 任务与番茄钟 ====================
+
+class TaskCreate(BaseModel):
+    """记下一件一次性的事。重复的事请用习惯。"""
+    title: str = Field(..., min_length=1, max_length=200)
+    notes: str = Field(default="", max_length=1000)
+    important: bool = False
+    due_date: Optional[str] = Field(default=None, description="YYYY-MM-DD，空表示先放下、不排进今天")
+
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+    important: Optional[bool] = None
+    due_date: Optional[str] = None
+    status: Optional[Literal["open", "done"]] = None
+
+
+class TaskOut(BaseModel):
+    id: int
+    title: str
+    notes: str
+    important: bool
+    due_date: Optional[str]
+    status: Literal["open", "done"]
+    completed_at: Optional[str]
+    created_at: str
+
+
+class FocusSessionCreate(BaseModel):
+    client_id: str = Field(..., min_length=8, max_length=80)
+    task_id: Optional[int] = None
+    kind: Literal["focus", "break"]
+    planned_seconds: int = Field(..., ge=1, le=28800)
+    actual_seconds: int = Field(..., ge=0, le=28800)
+    started_at: str = Field(..., min_length=10, max_length=40)
+    session_date: str
+    completed: bool = True
+
+
+class FocusSessionOut(BaseModel):
+    id: int
+    task_id: Optional[int]
+    task_title: Optional[str]
+    kind: Literal["focus", "break"]
+    planned_seconds: int
+    actual_seconds: int
+    started_at: str
+    ended_at: str
+    session_date: str
+    completed: bool
+
+
+class FocusDayOut(BaseModel):
+    date: str
+    focus_count: int
+    focus_minutes: int
+    sessions: list[FocusSessionOut]
+
+
+class FocusRecordDay(BaseModel):
+    date: str
+    sessions: list[FocusSessionOut]
+
+
+class FocusOverviewOut(BaseModel):
+    today_count: int
+    today_seconds: int
+    total_count: int
+    total_seconds: int
+    days: list[FocusRecordDay]
+
+
+class HabitDayMark(BaseModel):
+    date: str
+    status: Optional[Literal["done", "partial", "missed"]] = None
+
+
+class HabitBoardItem(HabitOut):
+    today_status: Optional[Literal["done", "partial", "missed"]] = None
+    streak: int
+    week: list[HabitDayMark]
+
+
+class HabitBoardOut(BaseModel):
+    date: str
+    items: list[HabitBoardItem]
 

@@ -27,7 +27,7 @@ from app.schemas import (
     MessageCreate,
     MessageUpdate,
 )
-from app.services.agent_brain import iter_text_chat_events, run_agent_chat
+from app.services.agent_brain import archive_voice_call_turn_async, iter_text_chat_events, run_agent_chat
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
@@ -59,6 +59,7 @@ def chat_with_bot(payload: ChatRequest):
             date_str=validated_date,
             mode=payload.mode,
             trigger_type=payload.trigger_type,
+            thread_id=payload.thread_id,
         )
     except HTTPException:
         raise
@@ -77,6 +78,7 @@ async def chat_with_bot_stream(payload: ChatRequest):
             date_str=validated_date,
             mode=payload.mode,
             trigger_type=payload.trigger_type,
+            thread_id=payload.thread_id,
         ):
             body = json.dumps(data, ensure_ascii=False)
             yield f"event: {event}\ndata: {body}\n\n"
@@ -385,3 +387,43 @@ def batch_delete_messages(payload: MessageBatchDeleteRequest):
             tuple(params),
         )
         return {"deleted_count": int(cur.rowcount or 0)}
+
+@router.get("/threads")
+def list_threads():
+    with db_cursor() as cur:
+        return [dict(r) for r in cur.execute("""
+            SELECT m.thread_id AS id, substr(first.content,1,36) AS title, max(m.id) AS latest
+            FROM messages m JOIN messages first ON first.id=(
+                SELECT min(f.id) FROM messages f WHERE f.thread_id=m.thread_id)
+            WHERE m.thread_id IS NOT NULL GROUP BY m.thread_id ORDER BY latest DESC""")]
+
+@router.get("/threads/{thread_id}")
+def thread_messages(thread_id: str):
+    with db_cursor() as cur:
+        return {"messages": [dict(r) for r in cur.execute(
+            """SELECT m.*, u.archive_result AS receipt FROM messages m LEFT JOIN messages u ON m.reply_to=u.id
+                WHERE m.thread_id=? ORDER BY m.id""", (thread_id,))]}
+
+@router.get("/messages/{message_id}")
+def get_message(message_id: int):
+    with db_cursor() as cur:
+        row=cur.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "消息已删除")
+        return dict(row)
+
+@router.post("/messages/{source_id}/archive")
+async def retry_archive(source_id: int):
+    with db_cursor() as cur:
+        row = cur.execute("""SELECT u.*, a.content AS reply FROM messages u
+            JOIN messages a ON a.reply_to=u.id WHERE u.id=? AND u.role='user'""",(source_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "原对话已删除")
+        if row["archive_result"]:
+            return json.loads(row["archive_result"])
+    try:
+        result = await archive_voice_call_turn_async(row["session_date"],row["content"],row["reply"],
+            thread_id=row["thread_id"],source_message_id=source_id)
+        return result["applied"]
+    except Exception as exc:
+        raise HTTPException(503, "本轮归档暂未完成，可以稍后重试") from exc

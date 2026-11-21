@@ -178,6 +178,7 @@ async def voice_call_websocket(websocket: WebSocket):
                 return False
 
     # 会话级状态
+    thread_id = None
     current_mode = "normal"
     current_rate: str | None = None
     active_turn_task: asyncio.Task[None] | None = None
@@ -228,6 +229,7 @@ async def voice_call_websocket(websocket: WebSocket):
                 active_turn_user_text,
                 f"{partial}…" if partial else fallback_note,
                 None,
+                thread_id,
             )
 
     async def run_turn(
@@ -336,6 +338,7 @@ async def voice_call_websocket(websocket: WebSocket):
                 user_message=user_text,
                 date_str=today_str,
                 mode=mode,
+                thread_id=thread_id,
             ):
                 if first_token_ms is None:
                     first_token_ms = round((time.perf_counter() - llm_t0) * 1000)
@@ -423,12 +426,13 @@ async def voice_call_websocket(websocket: WebSocket):
 
             # 3. 立即保存本轮有效对话到 SQLite，与主聊天室完全同步
             active_turn_saved = True
-            await asyncio.to_thread(
+            source_id = await asyncio.to_thread(
                 save_voice_call_messages,
                 today_str,
                 user_text,
                 full_reply,
                 total_ms,
+                thread_id,
             )
 
             await safe_send(
@@ -462,6 +466,8 @@ async def voice_call_websocket(websocket: WebSocket):
                         user_message=user_text,
                         assistant_reply=full_reply,
                         mode=mode,
+                        thread_id=thread_id,
+                        source_message_id=source_id,
                     )
                     await safe_send(
                         {
@@ -579,6 +585,7 @@ async def voice_call_websocket(websocket: WebSocket):
 
             if event_type == "start_call":
                 pending_audio_meta = None
+                thread_id = str(data.get("thread_id") or "")[:80] or None
                 current_mode = str(data.get("mode") or "normal")
                 current_rate = data.get("rate") or None
                 play_greeting = bool(data.get("play_greeting", True))

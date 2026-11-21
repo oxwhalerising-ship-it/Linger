@@ -1,654 +1,221 @@
-/**
- * ChatGPT Desktop 风格主控面板壳层（DashboardLayout）
- * --------------------------------------------------
- * 视觉与交互参考 ChatGPT Desktop（macOS / Windows 原生客户端）：
- * - 固定图标列几何锚点：无论展开还是收缩为 60px 图标条，所有图标 X 坐标对齐，零闪屏
- * - 收缩状态下完整保留「灵儿管家」品牌图标与「展开侧边栏」按钮，悬停图标弹出黑色圆角自定义气泡提示
- * - 支持左右拖拽调宽（184px ~ 380px），左拉带缓动吸附为图标功能条；右拉自动展开
- * - 支持 Ctrl+\ / Cmd+\ 快捷键切换与浅色/深色主题一键切换
- */
-
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type MouseEvent as ReactMouseEvent,
-  type ReactNode,
-} from "react";
-import { api, type HealthData } from "../../services/api";
-import {
-  IconAnalytics,
-  IconCalendar,
-  IconChat,
-  IconChecklist,
-  IconHistory,
-  IconMoon,
-  IconSettings,
-  IconSidebar,
-  IconSun,
-  IconWindow,
-} from "./AppleIcons";
-import { lazy, Suspense } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { api, formatLocalDate } from "../../services/api";
+import { IconCalendar, IconChat, IconAnalytics, IconChecklist, IconSparkles, IconBrain, IconSettings, IconSun, IconPlus, IconWindow, IconClock } from "./AppleIcons";
 import ChatView from "./ChatView";
-
-const HabitsView = lazy(() => import("./HabitsView"));
-const HistoryView = lazy(() => import("./HistoryView"));
-const JournalView = lazy(() => import("./JournalView"));
-const ReportsView = lazy(() => import("./ReportsView"));
-const SettingsView = lazy(() => import("./SettingsView"));
-
-export type TabId =
-  | "chat"
-  | "history"
-  | "habits"
-  | "journal"
-  | "reports"
-  | "settings";
-
-export interface DashboardViewProps {
-  sidebarOpen: boolean;
-  onToggleSidebar: () => void;
-}
-
-interface NavItem {
-  id: TabId;
-  label: string;
-  renderIcon: (active: boolean) => ReactNode;
-}
-
-interface HoverTooltip {
-  label: string;
-  top: number;
-}
-
-const PRIMARY_NAV: NavItem[] = [
-  { id: "chat", label: "灵儿对话", renderIcon: (active) => <IconChat filled={active} /> },
-  { id: "history", label: "历史消息", renderIcon: (active) => <IconHistory filled={active} /> },
-  { id: "habits", label: "习惯清单", renderIcon: (active) => <IconChecklist filled={active} /> },
-  { id: "journal", label: "日历与小确幸", renderIcon: (active) => <IconCalendar filled={active} /> },
-];
-
-const SECONDARY_NAV: NavItem[] = [
-  { id: "reports", label: "周报与月报", renderIcon: (active) => <IconAnalytics filled={active} /> },
-  { id: "settings", label: "设置与记忆", renderIcon: (active) => <IconSettings filled={active} /> },
-];
-
-const COMPACT_RAIL_WIDTH = 60;
-const DEFAULT_SIDEBAR_WIDTH = 252;
-const MIN_EXPANDED_WIDTH = 184;
-const MAX_SIDEBAR_WIDTH = 380;
-const SNAP_TO_COMPACT_THRESHOLD = 148;
-const SNAP_TO_EXPAND_THRESHOLD = 118;
-
-function getInitialSidebarWidth(): number {
-  try {
-    const raw = window.localStorage.getItem("taiwanbot_sidebar_width");
-    if (raw) {
-      const parsed = Number(raw);
-      if (
-        Number.isFinite(parsed) &&
-        parsed >= MIN_EXPANDED_WIDTH &&
-        parsed <= MAX_SIDEBAR_WIDTH
-      ) {
-        return parsed;
-      }
-    }
-  } catch {
-    // ignore storage errors
-  }
-  return DEFAULT_SIDEBAR_WIDTH;
-}
-
-function getInitialCompact(): boolean {
-  try {
-    return window.localStorage.getItem("taiwanbot_sidebar_compact") === "1";
-  } catch {
-    return false;
-  }
-}
-
-function getInitialTheme(): "light" | "dark" {
-  try {
-    const saved = window.localStorage.getItem("taiwanbot_theme");
-    if (saved === "dark" || saved === "light") return saved;
-  } catch {
-    // ignore storage errors
-  }
-  return "light";
-}
-
+import JournalView from "./JournalView";
+import ReportsView from "./ReportsView";
+import SettingsView from "./SettingsView";
+import HistoryView from "./HistoryView";
+import PlanView, { type PlanSection } from "./PlanView";
+import { Today, InsightsPage, Memories, Joys, Review, periodEnd } from "./CompanionPages";
+import { formatClock, setFocusSink, useFocusClock } from "../../services/focusClock";
+import "./companion.css";
+const nav = [
+  ["today", "今天", IconCalendar], ["plan", "安排", IconClock], ["chat", "对话", IconChat], ["insights", "洞察", IconAnalytics],
+  ["journal", "日记", IconChecklist], ["joy", "小确幸", IconSparkles], ["memory", "记忆", IconBrain], ["settings", "设置", IconSettings],
+] as const;
+type Page = typeof nav[number][0] | "history" | "reports";
 export default function DashboardLayout() {
-  const [activeTab, setActiveTab] = useState<TabId>("chat");
-  const [isCompact, setIsCompact] = useState<boolean>(getInitialCompact);
-  const [sidebarWidth, setSidebarWidth] = useState<number>(
-    getInitialSidebarWidth,
-  );
-  const [isResizing, setIsResizing] = useState(false);
-  const [isSnapping, setIsSnapping] = useState(false);
-  const [hoverTip, setHoverTip] = useState<HoverTooltip | null>(null);
-  const [theme, setTheme] = useState<"light" | "dark">(getInitialTheme);
-  const [petActive, setPetActive] = useState(true);
-  const [health, setHealth] = useState<HealthData | null>(null);
-  const [brainDetail, setBrainDetail] = useState<string | null>(null);
-  const isElectron = Boolean(window.taiwanBotEnv);
-
-  const dragStartXRef = useRef(0);
-  const dragStartWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
-  const isCompactRef = useRef(isCompact);
-  isCompactRef.current = isCompact;
-  const snapTimerRef = useRef<number | null>(null);
-
-  const triggerSnapTransition = useCallback(() => {
-    setIsSnapping(true);
-    if (snapTimerRef.current) {
-      window.clearTimeout(snapTimerRef.current);
-    }
-    snapTimerRef.current = window.setTimeout(() => {
-      setIsSnapping(false);
-      snapTimerRef.current = null;
-    }, 240);
-  }, []);
-
+  const [page, setPage] = useState<Page>("today");
+  const [planSection, setPlanSection] = useState<PlanSection>("tasks");
+  const clock = useFocusClock();
+  const [thread, setThread] = useState(() => crypto.randomUUID() as string);
+  const [chatVisited, setChatVisited] = useState(false);
   useEffect(() => {
-    return () => {
-      if (snapTimerRef.current) {
-        window.clearTimeout(snapTimerRef.current);
-      }
-    };
-  }, []);
-
-  // 展开侧边栏或拖拽时自动清除悬停提示
-  useEffect(() => {
-    if (!isCompact || isResizing) {
-      setHoverTip(null);
-    }
-  }, [isCompact, isResizing]);
-
-  const showCompactTip = (
-    e: ReactMouseEvent<HTMLElement>,
-    label: string,
-  ) => {
-    if (!isCompact || isResizing) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    setHoverTip({
-      label,
-      top: rect.top + rect.height / 2,
-    });
+    if (page === "chat")
+      setChatVisited(true);
+  }, [page]);
+  const [launch, setLaunch] = useState<{
+    id: number;
+    text: string;
+  }>();
+  const [review, setReview] = useState(false), [reviewOpen, setReviewOpen] = useState(false);
+  const [revision, setRevision] = useState(0), [day, setDay] = useState<string>();
+  const [period, setPeriod] = useState<"weekly" | "monthly">("weekly"), [offset, setOffset] = useState(0);
+  const [compose, setCompose] = useState(false), [ready, setReady] = useState(false);
+  const [section, setSection] = useState<"general" | "schedule">("general");
+  const [dark, setDark] = useState(() => localStorage.getItem("taiwanbot_theme") === "dark");
+  const [source, setSource] = useState<{
+    content: string;
+    session_date: string;
+  } | null>(null);
+  const [notice, setNotice] = useState("");
+  const saved = useCallback(() => setRevision(n => n + 1), []);
+  const journal = (v: string) => {
+    setDay(v);
+    setPage("journal");
   };
-
-  const hideCompactTip = () => setHoverTip(null);
-
-  // 持久化浅色 / 深色主题
+  const navigate = (p: Page) => {
+    setPage(p);
+    setCompose(false);
+    setSection("general");
+    if (p === "journal")
+      setDay(undefined);
+  };
+  const openThread = (id: string) => {
+    setLaunch(undefined);
+    setThread(id);
+    setReview(false);
+    setReviewOpen(false);
+    setPage("chat");
+  };
   useEffect(() => {
-    const root = document.documentElement;
-    if (theme === "dark") {
-      root.classList.add("dark");
-    } else {
-      root.classList.remove("dark");
-    }
-    try {
-      window.localStorage.setItem("taiwanbot_theme", theme);
-    } catch {
-      // ignore
-    }
-  }, [theme]);
-
-  // 持久化侧边栏宽度与收缩状态
+    document.documentElement.classList.toggle("dark", dark);
+    localStorage.setItem("taiwanbot_theme", dark ? "dark" : "light");
+  }, [dark]);
+  const [serviceDetail, setServiceDetail] = useState("");
   useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        "taiwanbot_sidebar_width",
-        String(sidebarWidth),
-      );
-      window.localStorage.setItem(
-        "taiwanbot_sidebar_compact",
-        isCompact ? "1" : "0",
-      );
-    } catch {
-      // ignore
-    }
-  }, [sidebarWidth, isCompact]);
-
-  // 快捷键 Ctrl+\ / Cmd+\ 在完整侧边栏与图标功能条间切换
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
-        e.preventDefault();
-        triggerSnapTransition();
-        setIsCompact((v) => !v);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [triggerSnapTransition]);
-
-  // 鼠标拖拽调整侧边栏宽度（左拉丝滑缓动吸附为图标栏，右拉自动展开）
-  const handleResizeStart = useCallback(
-    (e: ReactMouseEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      dragStartXRef.current = e.clientX;
-      dragStartWidthRef.current = isCompact
-        ? COMPACT_RAIL_WIDTH
-        : sidebarWidth;
-      setIsResizing(true);
-    },
-    [isCompact, sidebarWidth],
-  );
-
-  useEffect(() => {
-    if (!isResizing) return;
-
-    const prevCursor = document.body.style.cursor;
-    const prevUserSelect = document.body.style.userSelect;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const targetWidth =
-        dragStartWidthRef.current + (e.clientX - dragStartXRef.current);
-
-      if (!isCompactRef.current) {
-        if (targetWidth < SNAP_TO_COMPACT_THRESHOLD) {
-          triggerSnapTransition();
-          setIsCompact(true);
-        } else {
-          setSidebarWidth(
-            Math.min(
-              MAX_SIDEBAR_WIDTH,
-              Math.max(MIN_EXPANDED_WIDTH, targetWidth),
-            ),
-          );
-        }
-      } else {
-        if (targetWidth > SNAP_TO_EXPAND_THRESHOLD) {
-          triggerSnapTransition();
-          setIsCompact(false);
-          setSidebarWidth(
-            Math.min(
-              MAX_SIDEBAR_WIDTH,
-              Math.max(MIN_EXPANDED_WIDTH, targetWidth),
-            ),
-          );
-        }
-      }
-    };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      document.body.style.cursor = prevCursor;
-      document.body.style.userSelect = prevUserSelect;
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [isResizing, triggerSnapTransition]);
-
-  // 健康检查。大脑没起来或正在下模型时，侧边栏一直说人话。
-  useEffect(() => {
-    let stopped = false;
-    const tick = async () => {
+    let live = true;
+    async function check() {
       try {
-        const next = await api.getHealth();
-        if (stopped) return;
-        setHealth(next);
+        await api.getHealth();
+        if (!live) return;
+        setReady(true);
         const models = await api.getModelStatus();
-        if (stopped) return;
-        if (models.downloading) setBrainDetail("正在下载本地语音模型");
-        else if (models.error) setBrainDetail("语音模型下载失败");
-        else if (models.missing.length > 0) setBrainDetail("本地语音模型未就绪");
-        else setBrainDetail(null);
+        if (live) setServiceDetail(models.downloading ? "正在下载语音模型" : models.error ? "语音模型下载失败" :
+          models.missing.length ? "语音模型未就绪" : "");
       } catch {
-        if (!stopped) setHealth(null);
+        if (live) { setReady(false); setServiceDetail("等待本地服务"); }
       }
-    };
-    void tick();
-    const timer = window.setInterval(() => void tick(), 4000);
-    const off = window.taiwanBotEnv?.onBackendStatus?.((status) => {
-      if (status.state === "ready") return;
-      setBrainDetail(status.detail);
-      if (status.state === "down") setHealth(null);
+    }
+    void check();
+    const timer = setInterval(check, 5000);
+    const unsubscribe = window.taiwanBotEnv?.onBackendStatus?.(event => {
+      if (event.state !== "ready") setServiceDetail(event.detail);
+      if (event.state === "down") setReady(false);
     });
-    return () => {
-      stopped = true;
-      window.clearInterval(timer);
-      off?.();
-    };
+    return () => { live = false; clearInterval(timer); unsubscribe?.(); };
   }, []);
-
-  const currentWidth = isCompact ? COMPACT_RAIL_WIDTH : sidebarWidth;
-  const shouldAnimateWidth = !isResizing || isSnapping;
-
-  const renderNavGroup = (title: string, items: NavItem[]) => (
-    <div className="space-y-0.5">
-      <div
-        className={`overflow-hidden transition-[height,opacity] duration-200 ease-out ${
-          isCompact ? "h-0 opacity-0" : "h-6 opacity-100"
-        }`}
-      >
-        <div className="px-2.5 pt-1 text-[11px] font-medium tracking-wide text-[var(--text-tertiary)] whitespace-nowrap">
-          {title}
-        </div>
-      </div>
-
-      {items.map((item) => {
-        const active = activeTab === item.id;
-        return (
-          <button
-            key={item.id}
-            type="button"
-            onMouseEnter={(e) => showCompactTip(e, item.label)}
-            onMouseLeave={hideCompactTip}
-            onClick={() => setActiveTab(item.id)}
-            className={`group w-full h-9 flex items-center rounded-[10px] text-[13.5px] transition-colors cursor-pointer overflow-hidden ${
-              active
-                ? "bg-[var(--bg-active)] text-[var(--text-primary)] font-medium"
-                : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] font-normal"
-            }`}
-          >
-            <span
-              className={`w-9 h-9 flex items-center justify-center shrink-0 transition-colors ${
-                active
-                  ? "text-[var(--ink-primary)]"
-                  : "text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)]"
-              }`}
-            >
-              {item.renderIcon(active)}
-            </span>
-            <span
-              className={`truncate whitespace-nowrap pr-2.5 transition-[opacity,transform] duration-150 ease-out ${
-                isCompact
-                  ? "opacity-0 -translate-x-1 pointer-events-none"
-                  : "opacity-100 translate-x-0"
-              }`}
-            >
-              {item.label}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-
-  const viewProps: DashboardViewProps = {
-    sidebarOpen: true,
-    onToggleSidebar: () => {
-      triggerSnapTransition();
-      setIsCompact((v) => !v);
-    },
+  const parent = page === "history" ? "chat" : page === "reports" ? "insights" : page;
+  const openPlan = (section: PlanSection) => {
+    setPlanSection(section);
+    setPage("plan");
   };
+  useEffect(() => {
+    setFocusSink(async (item) => {
+      await api.recordFocus({
+        client_id: item.client_id,
+        task_id: item.task_id,
+        kind: item.kind,
+        planned_seconds: item.planned_seconds,
+        actual_seconds: item.actual_seconds,
+        started_at: item.started_at,
+        session_date: item.session_date,
+        completed: item.completed,
+      });
+      if (item.finish_task && item.task_id) {
+        try {
+          await api.updateTask(item.task_id, { status: "done" });
+        } catch (err) {
+          if (!String(err).includes("找不到")) throw err;
+        }
+      }
+      window.dispatchEvent(new Event("linger-plan"));
+    });
+    return () => setFocusSink(null);
+  }, []);
+  function start(text: string) {
+    setLaunch({ id: Date.now(), text });
+    setReview(text.includes("复盘"));
+    setPage("chat");
+  }
+  return <div className="l-shell">
+    <aside className="l-sidebar">
+      <div className="l-brand"><img alt="灵儿" src="./linger/crystal_badge.png" /></div>
+      <button className="l-new" aria-label="新对话" onClick={() => openThread(crypto.randomUUID())}>
+        <IconPlus />
+      </button>
+      <nav aria-label="主导航">
+        {nav.map(([id, label, Icon]) => (
+          <button key={id} aria-label={id === "plan" && clock.phase !== "idle" ? `${label}，${clock.phase === "focus" ? "专注中" : "休息中"} ${formatClock(clock.remaining)}` : label} aria-current={parent === id ? "page" : undefined} onClick={() => navigate(id)}>
+            <Icon />
+          </button>
+        ))}
+      </nav>
+      <footer>
+        <span role="status" tabIndex={0} aria-label={serviceDetail || (ready ? "本地服务已连接" : "等待本地服务")}>
+          <i className={ready ? (serviceDetail ? "pending" : "online") : "offline"} />
+        </span>
+        <button aria-label="切换主题" onClick={() => setDark(!dark)}><IconSun /></button>
+        {window.taiwanBotEnv && <button aria-label="显示或隐藏桌宠" onClick={() => window.taiwanBotEnv?.togglePetVisibility()}><IconWindow /></button>}
+      </footer>
+    </aside>
 
-  return (
-    <div className="h-screen w-screen flex bg-[var(--bg-canvas)] text-[var(--text-primary)] overflow-hidden transition-colors duration-200 relative">
-      {/* 左侧 ChatGPT Desktop 风格侧边栏：温和质感灰 + 固定图标锚点 + 丝滑吸附 */}
-      <aside
-        style={{ width: `${currentWidth}px` }}
-        className={`relative shrink-0 bg-[var(--bg-sidebar)] border-r border-[var(--border-subtle)] flex flex-col justify-between overflow-hidden select-none will-change-[width] ${
-          shouldAnimateWidth
-            ? "transition-[width] duration-220 [transition-timing-function:cubic-bezier(0.22,1,0.36,1)]"
-            : "transition-none"
-        }`}
-      >
-        <div className="flex flex-col flex-1 min-h-0 px-3 pt-3 pb-3">
-          {/* 顶部品牌行：始终保留「灵儿管家」Icon；展开时右侧显示收起按钮，收缩时下方显示展开按钮 */}
-          <div className="mb-3 space-y-1">
-            <div className="flex items-center justify-between h-9">
-              <button
-                type="button"
-                onMouseEnter={(e) => showCompactTip(e, "灵儿管家")}
-                onMouseLeave={hideCompactTip}
-                onClick={() => setActiveTab("chat")}
-                className="flex items-center h-9 rounded-[10px] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer overflow-hidden min-w-9"
-              >
-                <span className="w-9 h-9 flex items-center justify-center shrink-0">
-                  <img
-                    src="./linger/app_icon.png"
-                    alt="灵儿管家"
-                    draggable={false}
-                    className="w-7 h-7 rounded-[8px] object-cover shadow-xs"
-                  />
-                </span>
-                {!isCompact && (
-                  <span className="text-[14px] font-semibold tracking-tight text-[var(--text-primary)] truncate whitespace-nowrap pr-2">
-                    灵儿管家
-                  </span>
-                )}
-              </button>
+    <main className="l-main">
+      {window.taiwanBotEnv && <div className="l-window-drag" aria-hidden="true" />}
+      {clock.phase !== "idle" && !(page === "plan" && planSection === "focus") && <button className="l-focus-banner" onClick={() => openPlan("focus")}>
+        {clock.phase === "focus" ? "专注中" : "休息中"} {formatClock(clock.remaining)}
+        {clock.taskTitle ? ` · ${clock.taskTitle}` : ""}
+      </button>}
 
-              {!isCompact && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    triggerSnapTransition();
-                    setIsCompact(true);
-                  }}
-                  title="收缩为图标栏 (Ctrl+\)"
-                  className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors cursor-pointer shrink-0"
-                >
-                  <IconSidebar className="w-[17px] h-[17px]" />
-                </button>
-              )}
-            </div>
+      {page === "today" && <Today key={String(ready)} send={start} habits={() => openPlan("habits")} tasks={() => openPlan("tasks")} focus={() => openPlan("focus")} insights={() => {
+        setPeriod("weekly");
+        setOffset(0);
+        setPage("insights");
+      }} joy={() => {
+        setCompose(true);
+        setPage("joy");
+      }} settings={() => {
+        setSection("schedule");
+        setPage("settings");
+      }} />}
 
-            {/* 收缩态专属：在品牌图标下方保留「展开侧边栏」按钮 */}
-            <div
-              className={`overflow-hidden transition-[height,opacity] duration-200 ease-out ${
-                isCompact ? "h-9 opacity-100" : "h-0 opacity-0"
-              }`}
-            >
-              <button
-                type="button"
-                onMouseEnter={(e) => showCompactTip(e, "展开侧边栏 (Ctrl+\\)")}
-                onMouseLeave={hideCompactTip}
-                onClick={() => {
-                  triggerSnapTransition();
-                  setIsCompact(false);
-                }}
-                className="w-9 h-9 rounded-[10px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
-              >
-                <IconSidebar className="w-[17px] h-[17px]" />
-              </button>
-            </div>
-          </div>
+      {(page === "chat" || chatVisited) && <div className="l-chat-wrap" style={page === "chat" ? undefined : { display: "none" }}>
+        <div className="l-chat-main"><ChatView key={thread} threadId={thread} launch={launch} onConsumed={() => setLaunch(undefined)} onJournal={journal} onHistory={() => setPage("history")} onReview={() => setReview(true)} onMemory={() => setPage("memory")} onSaved={saved} /></div>
+        {review && <>
+          <button className="l-review-toggle l-pill" onClick={() => setReviewOpen(!reviewOpen)}>{reviewOpen ? "关闭复盘" : "查看今日复盘"}</button>
+          <div className={"l-review-slot " + (reviewOpen ? "open" : "")}><Review date={formatLocalDate()} revision={revision} open={() => journal(formatLocalDate())} /></div>
+        </>}
+      </div>}
 
-          {/* 导航分组列表 */}
-          <nav className="flex-1 overflow-y-auto no-scrollbar space-y-2.5">
-            {renderNavGroup("日常陪伴", PRIMARY_NAV)}
-            <div
-              className={`mx-2 h-px bg-[var(--border-subtle)] transition-opacity duration-200 ${
-                isCompact ? "opacity-100" : "opacity-0 h-0"
-              }`}
-            />
-            {renderNavGroup("洞察与配置", SECONDARY_NAV)}
-          </nav>
+      {page === "insights" && <InsightsPage period={period} offset={offset} select={p => {
+        setPeriod(p);
+        setOffset(0);
+      }} shift={setOffset} report={() => setPage("reports")} day={journal} />}
 
-          {/* 底部实用工具与连接状态 */}
-          <div className="pt-3 mt-2 border-t border-[var(--border-subtle)] space-y-1">
-            {isElectron && (
-              <button
-                type="button"
-                onMouseEnter={(e) => showCompactTip(e, "显示 / 隐藏桌宠")}
-                onMouseLeave={hideCompactTip}
-                onClick={() => {
-                  setPetActive((v) => !v);
-                  window.taiwanBotEnv?.togglePetVisibility();
-                }}
-                className={`group w-full h-9 flex items-center rounded-[10px] text-[13px] transition-colors cursor-pointer overflow-hidden ${
-                  petActive
-                    ? "text-[var(--text-primary)] hover:bg-[var(--bg-hover)] font-medium"
-                    : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
-                }`}
-              >
-                <span
-                  className={`w-9 h-9 flex items-center justify-center shrink-0 transition-colors ${
-                    petActive
-                      ? "text-[var(--ink-primary)]"
-                      : "text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)]"
-                  }`}
-                >
-                  <IconWindow className="w-[18px] h-[18px]" filled={petActive} />
-                </span>
-                <span
-                  className={`truncate whitespace-nowrap pr-2.5 transition-[opacity,transform] duration-150 ${
-                    isCompact
-                      ? "opacity-0 -translate-x-1 pointer-events-none"
-                      : "opacity-100 translate-x-0"
-                  }`}
-                >
-                  显示 / 隐藏桌宠
-                </span>
-              </button>
-            )}
+      {page === "journal" && <JournalView initialDate={day} />}
 
-            <button
-              type="button"
-              onMouseEnter={(e) =>
-                showCompactTip(
-                  e,
-                  theme === "light" ? "切换深色外观" : "切换浅色外观",
-                )
-              }
-              onMouseLeave={hideCompactTip}
-              onClick={() =>
-                setTheme((t) => (t === "light" ? "dark" : "light"))
-              }
-              className={`group w-full h-9 flex items-center rounded-[10px] text-[13px] transition-colors cursor-pointer overflow-hidden ${
-                theme === "dark"
-                  ? "text-[var(--text-primary)] hover:bg-[var(--bg-hover)] font-medium"
-                  : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
-              }`}
-            >
-              <span
-                className={`w-9 h-9 flex items-center justify-center shrink-0 transition-colors ${
-                  theme === "dark"
-                    ? "text-[var(--ink-primary)]"
-                    : "text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)]"
-                }`}
-              >
-                {theme === "light" ? (
-                  <IconMoon className="w-[18px] h-[18px]" filled={false} />
-                ) : (
-                  <IconSun className="w-[18px] h-[18px]" filled={true} />
-                )}
-              </span>
-              <span
-                className={`flex-1 flex items-center justify-between min-w-0 pr-2.5 transition-[opacity,transform] duration-150 ${
-                  isCompact
-                    ? "opacity-0 -translate-x-1 pointer-events-none"
-                    : "opacity-100 translate-x-0"
-                }`}
-              >
-                <span className="truncate whitespace-nowrap">
-                  {theme === "light" ? "深色外观" : "浅色外观"}
-                </span>
-                <span className="text-[11px] text-[var(--text-tertiary)] shrink-0 ml-2">
-                  {theme === "light" ? "Light" : "Dark"}
-                </span>
-              </span>
-            </button>
+      {page === "joy" && <Joys compose={compose} />}
 
-            <div
-              onMouseEnter={(e) =>
-                showCompactTip(
-                  e,
-                  health
-                    ? brainDetail
-                      ? `${brainDetail} · v${health.version}`
-                      : `本地大脑在线 · v${health.version}`
-                    : brainDetail || "后端未连接",
-                )
-              }
-              onMouseLeave={hideCompactTip}
-              className="h-7 flex items-center text-[11px] text-[var(--text-tertiary)] overflow-hidden"
-            >
-              <span className="w-9 h-7 flex items-center justify-center shrink-0">
-                <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    health && !brainDetail
-                      ? "bg-emerald-500"
-                      : health
-                        ? "bg-amber-500"
-                        : "bg-rose-500"
-                  }`}
-                />
-              </span>
-              <span
-                className={`flex-1 flex items-center justify-between min-w-0 pr-2.5 transition-opacity duration-150 whitespace-nowrap ${
-                  isCompact
-                    ? "opacity-0 pointer-events-none"
-                    : "opacity-100"
-                }`}
-              >
-                <span className="truncate">
-                  {health ? brainDetail || "本地大脑在线" : brainDetail || "后端未连接"}
-                </span>
-                <span className="font-mono text-[10.5px] opacity-80 shrink-0 ml-2">
-                  v{health?.version ?? "0.4"}
-                </span>
-              </span>
-            </div>
-          </div>
-        </div>
+      {page === "memory" && <Memories source={async (id) => {
+        try {
+          const m = await api.message(id);
+          if (m.thread_id)
+            openThread(m.thread_id);
+          setSource(m);
+        }
+        catch (e) {
+          setNotice(String(e));
+        }
+      }} />}
 
-        {/* 右侧极简拖拽调宽热区 */}
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="拖拽调整侧边栏宽度"
-          onMouseDown={handleResizeStart}
-          onDoubleClick={() => {
-            triggerSnapTransition();
-            setIsCompact(false);
-            setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
-          }}
-          className="group absolute top-0 right-0 bottom-0 w-1.5 cursor-col-resize z-20 flex justify-end"
-        >
-          <span
-            className={`w-[2px] h-full transition-colors ${
-              isResizing
-                ? "bg-[var(--text-tertiary)]"
-                : "bg-transparent group-hover:bg-[var(--border-strong)]"
-            }`}
-          />
-        </div>
-      </aside>
+      {page === "settings" && <SettingsView initialSection={section} />}
 
-      {/* 图标功能条悬停自定义黑色圆角 Tooltip（挂在 aside 外层，绝不被裁切） */}
-      {isCompact && hoverTip && (
-        <div
-          style={{
-            top: `${hoverTip.top}px`,
-            left: `${COMPACT_RAIL_WIDTH + 8}px`,
-          }}
-          className="fixed -translate-y-1/2 z-50 px-2.5 py-1.5 rounded-lg bg-[#141414] text-white text-[12px] font-medium tracking-tight shadow-[0_6px_20px_rgba(0,0,0,0.22)] border border-white/10 pointer-events-none whitespace-nowrap"
-        >
-          {hoverTip.label}
-        </div>
-      )}
+      {page === "plan" && <PlanView section={planSection} select={setPlanSection} />}
 
-      {/* 右侧主画布（次级视图按需懒加载，缩短控制台首屏解析耗时） */}
-      <main className="flex-1 min-w-0 h-full overflow-hidden bg-[var(--bg-canvas)]">
-        {activeTab === "chat" && <ChatView {...viewProps} />}
-        {activeTab !== "chat" && (
-          <Suspense
-            fallback={
-              <div className="h-full w-full flex items-center justify-center text-sm text-[var(--text-muted)]">
-                加载中…
-              </div>
-            }
-          >
-            {activeTab === "history" && <HistoryView {...viewProps} />}
-            {activeTab === "habits" && <HabitsView {...viewProps} />}
-            {activeTab === "journal" && <JournalView {...viewProps} />}
-            {activeTab === "reports" && <ReportsView {...viewProps} />}
-            {activeTab === "settings" && <SettingsView {...viewProps} />}
-          </Suspense>
-        )}
-      </main>
-    </div>
-  );
+      {page === "reports" && <>
+        <button className="l-back" onClick={() => setPage("insights")}>‹ 返回洞察</button>
+        <ReportsView endDate={periodEnd(period, offset)} initialPeriod={period} />
+      </>}
+
+      {page === "history" && <>
+        <button className="l-back" onClick={() => setPage("chat")}>‹ 返回对话</button>
+        <HistoryView />
+      </>}
+
+      {source && <div className="l-dialog">
+        <article className="l-card">
+          <h2>来源消息</h2>
+          <time>{source.session_date}</time>
+          <p>{source.content}</p>
+          <button className="l-pill" onClick={() => setSource(null)}>关闭</button>
+        </article>
+      </div>}
+
+      {notice && <button className="l-error" onClick={() => setNotice("")}>
+        {notice} ×
+      </button>}
+
+    </main>
+  </div>;
 }

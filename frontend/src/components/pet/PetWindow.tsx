@@ -403,8 +403,8 @@ export default function PetWindow() {
             }
 
             if (msg.type === "wakeword_detected") {
-              // 若桌宠已经在通话中，忽略唤醒事件避免冲突
-              if (callOpenRef.current) return;
+              // 通话中或免打扰中不再被唤醒词拉起来
+              if (callOpenRef.current || dndRef.current) return;
               // 与桌宠打电话保持完全统一的 UI 与全双工实时通话功能（含空格手动发送/打断、字幕、静音、插话等）
               playPetSound("dispatch", { muted: dndRef.current });
               startPetCallRef.current();

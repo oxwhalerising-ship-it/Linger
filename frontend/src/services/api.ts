@@ -25,6 +25,8 @@ export interface HealthData {
 export type MessageChannel = "all" | "text" | "voice";
 
 export interface ChatMessageItem {
+  reply_to?:number|null;
+  receipt?:string|null;
   id: number;
   session_date: string;
   channel?: "text" | "voice";
@@ -74,6 +76,51 @@ export interface HabitItem {
   created_at: string;
 }
 
+export interface HabitBoardItem extends HabitItem {
+  today_status: "done" | "partial" | "missed" | null;
+  streak: number;
+  week: Array<{ date: string; status: "done" | "partial" | "missed" | null }>;
+}
+
+export interface TaskItem {
+  id: number;
+  title: string;
+  notes: string;
+  important: boolean;
+  due_date: string | null;
+  status: "open" | "done";
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface FocusSessionItem {
+  id: number;
+  task_id: number | null;
+  task_title: string | null;
+  kind: "focus" | "break";
+  planned_seconds: number;
+  actual_seconds: number;
+  started_at: string;
+  ended_at: string;
+  session_date: string;
+  completed: boolean;
+}
+
+export interface FocusDay {
+  date: string;
+  focus_count: number;
+  focus_minutes: number;
+  sessions: FocusSessionItem[];
+}
+
+export interface FocusOverview {
+  today_count: number;
+  today_seconds: number;
+  total_count: number;
+  total_seconds: number;
+  days: Array<{ date: string; sessions: FocusSessionItem[] }>;
+}
+
 export interface HabitRecordItem {
   habit_id: number;
   habit_title: string;
@@ -108,6 +155,7 @@ export interface MonthlyHeatmapDay {
 }
 
 export interface MemoryItem {
+  source_message_id?:number | null;
   id: number;
   memory_type: "preference" | "ongoing_event" | "highlight";
   content: string;
@@ -117,6 +165,7 @@ export interface MemoryItem {
 }
 
 export interface ReportStats {
+  daily_done?:Record<string,number>;
   start_date: string;
   end_date: string;
   total_days: number;
@@ -185,6 +234,7 @@ export interface WakewordStatusData {
   last_triggered_at: string | null;
   last_error: string | null;
   setup_hints?: string[];
+  blocked_by_dnd?: boolean;
 }
 
 export type ScheduleEventType =
@@ -244,7 +294,20 @@ export function formatLocalDate(d: Date = new Date()): string {
   return `${y}-${m}-${day}`;
 }
 
+export interface Highlight {id:number; date:string; content:string; favorite:boolean}
+export type Insights = ReportStats & {activity: Record<string,number>; streak:number};
 export const api = {
+  retryArchive:(id:number)=>requestJson<import("./petApi").ChatResponseData["extracted"]>(`/api/chat/messages/${id}/archive`,{method:"POST"}),
+  message:(id:number)=>requestJson<ChatMessageItem & {thread_id?:string}>(`/api/chat/messages/${id}`),
+  threads: () => requestJson<{id:string; title:string}[]>("/api/chat/threads"),
+  thread: (id:string) => requestJson<{messages:ChatMessageItem[]}>(`/api/chat/threads/${encodeURIComponent(id)}`),
+  insights: (period:string, end:string) => requestJson<Insights>(`/api/reports/insights?period_type=${period}&end_date=${end}`),
+  highlights: (month:string) => requestJson<Highlight[]>(`/api/logs/highlights/list?month=${month}`),
+  favorite: (id:number, value:boolean) => requestJson(`/api/logs/highlights/${id}/favorite?favorite=${value}`,{method:"PUT"}),
+  appendHighlight: (date:string,content:string) => requestJson<DailyLogDetail>(`/api/logs/${date}/highlights`,{method:"POST",body:JSON.stringify({content})}),
+  editMemory: (item:MemoryItem) => requestJson<MemoryItem>(`/api/memories/${item.id}`,{method:"PATCH",body:JSON.stringify(item)}),
+  reportMarkdown: (id:number) => requestJson<{text:string}>(`/api/reports/${id}/markdown`),
+
   // 健康检查
   getHealth: () => requestJson<HealthData>("/api/health"),
 
@@ -343,6 +406,52 @@ export const api = {
     requestJson<{ deleted: boolean }>(`/api/habits/${id}`, {
       method: "DELETE",
     }),
+  habitBoard: (date: string) =>
+    requestJson<{ date: string; items: HabitBoardItem[] }>(
+      `/api/habits/board?date=${encodeURIComponent(date)}`,
+    ),
+
+  listTasks: (scope: "today" | "later" | "done" = "today", on?: string) =>
+    requestJson<TaskItem[]>(
+      `/api/tasks?scope=${scope}${on ? `&on=${encodeURIComponent(on)}` : ""}`,
+    ),
+  createTask: (payload: { title: string; due_date?: string | null; important?: boolean }) =>
+    requestJson<TaskItem>("/api/tasks", { method: "POST", body: JSON.stringify(payload) }),
+  updateTask: (
+    id: number,
+    payload: Partial<{
+      title: string;
+      important: boolean;
+      due_date: string | null;
+      status: "open" | "done";
+    }>,
+  ) =>
+    requestJson<TaskItem>(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  postponeTask: (id: number, on?: string) =>
+    requestJson<TaskItem>(`/api/tasks/${id}/postpone${on ? `?on=${encodeURIComponent(on)}` : ""}`, {
+      method: "POST",
+    }),
+  deleteTask: (id: number) =>
+    requestJson<{ deleted: boolean }>(`/api/tasks/${id}`, { method: "DELETE" }),
+
+  focusOverview: (on?: string) =>
+    requestJson<FocusOverview>(`/api/focus/overview${on ? `?on=${encodeURIComponent(on)}` : ""}`),
+  focusDay: (date: string) =>
+    requestJson<FocusDay>(`/api/focus/days/${encodeURIComponent(date)}`),
+  recordFocus: (payload: {
+    client_id: string;
+    task_id: number | null;
+    kind: "focus" | "break";
+    planned_seconds: number;
+    actual_seconds: number;
+    started_at: string;
+    session_date: string;
+    completed: boolean;
+  }) =>
+    requestJson<FocusSessionItem>("/api/focus/sessions", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   // 每日复盘与月度热力图
   getMonthlyLogs: (month: string) =>
@@ -437,6 +546,7 @@ export const api = {
     }
     return (await res.json()) as { text: string };
   },
+  testModel:(model:string,base_url:string,api_key:string)=>requestJson("/api/settings/test-model",{method:"POST",body:JSON.stringify({model,base_url,api_key})}),
   getSettings: () => requestJson<Record<string, unknown>>("/api/settings"),
   updateSettings: (settings: Record<string, unknown>) =>
     requestJson<Record<string, unknown>>("/api/settings", {
@@ -477,7 +587,11 @@ export const api = {
       body: JSON.stringify({ enabled, keyword }),
     }),
   simulateWakeword: () =>
-    requestJson<{ triggered: boolean; delivered_clients: number }>(
+    requestJson<{
+      triggered: boolean;
+      delivered_clients: number;
+      reason?: string;
+    }>(
       "/api/voice/wakeword/simulate",
       { method: "POST" },
     ),

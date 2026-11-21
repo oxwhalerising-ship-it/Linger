@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from app.core.settings_store import invalidate_settings_cache
 from app.database import DATA_DIR, DEFAULT_SETTINGS, db_cursor
 from app.services.event_bus import event_bus
 from app.services.tts_provider import split_sentences_for_streaming
@@ -77,6 +78,7 @@ class OfflineWakewordEngine:
                 """,
                 (json.dumps(cfg, ensure_ascii=False), now_iso),
             )
+        invalidate_settings_cache()
         return cfg
 
     def _find_kws_model_files(self) -> dict[str, Path] | None:
@@ -217,6 +219,16 @@ class OfflineWakewordEngine:
 
     async def broadcast_wakeup(self, keyword: str, simulated: bool = False) -> dict[str, Any]:
         """通过 WebSocket 广播唤醒命中事件，让桌宠在 1 秒内响应并进入对话态"""
+        from app.services.scheduler_service import load_schedule_settings
+
+        # 免打扰已把唤醒关掉时，真实命中和模拟唤醒都不再把桌宠叫起来。
+        if load_schedule_settings().get("dnd_enabled") and not self._load_config().get("enabled", False):
+            return {
+                "triggered": False,
+                "reason": "dnd_enabled",
+                "delivered_clients": 0,
+            }
+
         self._last_triggered_at = datetime.now().isoformat(timespec="seconds")
         # 应答词不重复念出唤醒词本身，避免扬声器外放导致麦克风回声二次误触发
         reply_text = "欸～我在喔！有什么事直接说吧！"
@@ -317,7 +329,16 @@ class OfflineWakewordEngine:
 
     def start_if_enabled(self, loop: asyncio.AbstractEventLoop | None = None) -> dict[str, Any]:
         """后端启动时自动检查数据库配置，若用户已启用唤醒则自动拉起本地监听线程"""
+        from app.services.scheduler_service import load_schedule_settings
+
         cfg = self._load_config()
+        if load_schedule_settings().get("dnd_enabled"):
+            # 重启时如果免打扰还开着，唤醒不能自己回来。
+            if cfg.get("enabled", False):
+                self._save_config(enabled=False, keyword=str(cfg.get("keyword") or "灵儿"))
+            self.stop()
+            return self.get_status()
+
         if not cfg.get("enabled", False):
             return self.get_status()
 

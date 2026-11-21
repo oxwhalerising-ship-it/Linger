@@ -2,7 +2,7 @@
  * ChatGPT Desktop 风格语音/文字对话室（ChatView）
  * ---------------------------------------------
  * 视觉与交互参考 ChatGPT Desktop 原生客户端：
- * - 顶部 52px 极简浮动栏 + 模式切换下拉菜单（白天随聊 / 晚间清单复盘）
+ * - 同一会话中支持文字、录音、实时通话和复盘
  * - 居中 768px 编辑感消息流：用户消息为中性圆角胶囊，灵儿回复为无边框通栏排版 + 悬停操作栏（复制 / 重播语音）
  * - 底部标志性圆角悬浮输入胶囊：支持多行自适应输入、IME 中文选词防误触、双模语音（点击说话 / 免提 VAD）与声波反馈
  */
@@ -27,7 +27,7 @@ import {
   playTaiwanSentences,
   sendQuickChat,
   splitSentencesForSpeech,
-  type ChatMode,
+  type ChatResponseData,
 } from "../../services/petApi";
 import {
   isBrowserSpeechAvailable,
@@ -37,7 +37,6 @@ import {
 } from "../../services/voiceRecorder";
 import AvatarRenderer from "../pet/AvatarRenderer";
 import type { PetEmotion } from "../../types/pet";
-import type { DashboardViewProps } from "./DashboardLayout";
 import Tooltip from "./Tooltip";
 import VoiceCallOverlay, {
   type CommittedVoiceTurn,
@@ -49,7 +48,6 @@ import {
   IconCopy,
   IconMic,
   IconPhone,
-  IconSidebar,
   IconStop,
   IconVolumeOff,
   IconVolumeOn,
@@ -72,6 +70,16 @@ interface LocalChatBubble {
   createdAtMs: number;
   durationMs?: number;
   tags?: string[];
+  pendingArchive?:number;
+}
+
+function archiveTags(extracted: ChatResponseData["extracted"]) {
+  const tags: string[] = [];
+  if (extracted?.habit_updates?.length) tags.push(`已记录 ${extracted.habit_updates.length} 项习惯`);
+  if (extracted?.new_highlights?.length) tags.push(`收入 ${extracted.new_highlights.length} 条小确幸`);
+  if (extracted?.new_memories?.length) tags.push(`记住 ${extracted.new_memories.length} 条长期记忆`);
+  if (extracted?.summary_updated || extracted?.mood_score || extracted?.energy_score) tags.push("已记入日记");
+  return tags;
 }
 
 function parseTimestampMs(isoLike: string): number {
@@ -100,26 +108,6 @@ function formatDuration(durationMs: number): string {
   return `${mins} 分 ${remSec.toFixed(1)} 秒`;
 }
 
-const MODE_OPTIONS: Array<{
-  id: ChatMode;
-  title: string;
-  shortTitle: string;
-  desc: string;
-}> = [
-  {
-    id: "normal",
-    title: "白天随聊",
-    shortTitle: "白天随聊",
-    desc: "边聊边静默帮你记录习惯、心情与日常点滴",
-  },
-  {
-    id: "evening_review",
-    title: "晚间清单复盘",
-    shortTitle: "晚间复盘",
-    desc: "逐项核对今日未记录的习惯清单并收集小确幸",
-  },
-];
-
 const QUICK_PROMPTS = [
   {
     title: "汇报今日习惯",
@@ -135,14 +123,10 @@ const QUICK_PROMPTS = [
   },
 ];
 
-export default function ChatView({
-  sidebarOpen,
-  onToggleSidebar,
-}: DashboardViewProps) {
+interface ChatProps {threadId:string; launch?:{id:number;text:string}; onJournal:(date:string)=>void; onHistory:()=>void; onReview:()=>void; onMemory:()=>void; onConsumed:()=>void; onSaved:()=>void}
+export default function ChatView({threadId, launch, onReview, onMemory, onConsumed, onJournal, onHistory, onSaved}: ChatProps) {
   const [messages, setMessages] = useState<LocalChatBubble[]>([]);
   const [input, setInput] = useState("");
-  const [mode, setMode] = useState<ChatMode>("normal");
-  const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [activeVoiceMode, setActiveVoiceMode] = useState<VoiceInputMode | null>(
     null,
   );
@@ -167,7 +151,6 @@ export default function ChatView({
 
   const listEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const modeMenuRef = useRef<HTMLDivElement | null>(null);
   const speedMenuRef = useRef<HTMLDivElement | null>(null);
   const ttsSettingsRef = useRef<Record<string, unknown>>({});
   const audioAbortRef = useRef<AbortController | null>(null);
@@ -203,14 +186,9 @@ export default function ChatView({
 
   // 点击外部关闭模式 / 语速下拉菜单
   useEffect(() => {
-    if (!modeMenuOpen && !speedMenuOpen) return;
+    if (!speedMenuOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (
-        modeMenuRef.current &&
-        !modeMenuRef.current.contains(e.target as Node)
-      ) {
-        setModeMenuOpen(false);
-      }
+
       if (
         speedMenuRef.current &&
         !speedMenuRef.current.contains(e.target as Node)
@@ -220,7 +198,7 @@ export default function ChatView({
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [modeMenuOpen, speedMenuOpen]);
+  }, [speedMenuOpen]);
 
   // 自动调整 textarea 高度
   useEffect(() => {
@@ -232,9 +210,10 @@ export default function ChatView({
 
   // 加载今日对话历史与本地离线 STT 状态
   useEffect(() => {
-    const today = formatLocalDate();
+    const today=formatLocalDate();
+    let live = true;
     void api
-      .getChatHistory(today)
+      .thread(threadId)
       .then((res) => {
         const mapped: LocalChatBubble[] = res.messages
           .filter(
@@ -244,12 +223,14 @@ export default function ChatView({
             id: String(m.id),
             role: m.role === "user" ? "user" : "assistant",
             content: m.content,
+            tags:m.receipt?archiveTags(JSON.parse(m.receipt)):[],
+            pendingArchive:m.reply_to&&!m.receipt?m.reply_to:undefined,
             time: m.created_at.slice(11, 16),
             createdAtMs: parseTimestampMs(m.created_at),
             durationMs:
               typeof m.duration_ms === "number" ? m.duration_ms : undefined,
           }));
-        setMessages(mapped);
+        if (live) setMessages(current => [...mapped, ...current]);
       })
       .catch(() => {});
 
@@ -283,6 +264,7 @@ export default function ChatView({
       .catch(() => {});
 
     return () => {
+      live = false;
       audioAbortRef.current?.abort();
       recorderRef.current?.stop();
       stopBrowserSpeechRef.current?.();
@@ -299,6 +281,8 @@ export default function ChatView({
       const text = rawText.trim();
       if (!text || sending) return;
 
+      const reviewRequested = /^(?:(?:请|帮我|开始|开启|来|我们|一起|做个|做一下|今天的|晚间|晚上|一下|想)+)?复盘/.test(text);
+      if (reviewRequested) onReview();
       audioAbortRef.current?.abort();
       const controller = new AbortController();
       audioAbortRef.current = controller;
@@ -363,8 +347,8 @@ export default function ChatView({
           })
         : null;
       try {
-        const res = await sendQuickChat(text, mode, "manual", {
-          signal: controller.signal,
+        const res = await sendQuickChat(text, reviewRequested ? "evening_review" : "normal", "manual", {
+          threadId,
           onSentence: (sentence) => {
             liveText = liveText ? `${liveText}${sentence}` : sentence;
             upsertAssistant({ content: liveText });
@@ -378,7 +362,6 @@ export default function ChatView({
               sentences: reply.sentences,
               durationMs,
             });
-            setSending(false);
             setBotEmotion(emotion);
             window.taiwanBotEnv?.sendPetPreviewState({
               emotion,
@@ -386,16 +369,7 @@ export default function ChatView({
             });
           },
         });
-        const tags: string[] = [];
-        if (res.extracted?.habit_updates?.length) {
-          tags.push(`已静默记录 ${res.extracted.habit_updates.length} 项习惯`);
-        }
-        if (res.extracted?.new_highlights?.length) {
-          tags.push(`收入 ${res.extracted.new_highlights.length} 条小确幸`);
-        }
-        if (res.extracted?.new_memories?.length) {
-          tags.push(`记住 ${res.extracted.new_memories.length} 条长期记忆`);
-        }
+        const tags = archiveTags(res.extracted);
         if (res.used_offline_fallback) {
           tags.push("离线演示回复");
         }
@@ -404,10 +378,12 @@ export default function ChatView({
           content: res.reply,
           sentences: res.sentences,
           tags,
+          pendingArchive:res.archive_failed?res.source_id:undefined,
           durationMs: res.duration_ms ?? Math.max(100, Math.round(performance.now() - startedPerf)),
         });
         setNowTick(Date.now());
         setPendingHabits(res.pending_habits || []);
+        onSaved();
         setSending(false);
         if (!player) setBotEmotion(emotion);
         await player?.close();
@@ -423,8 +399,16 @@ export default function ChatView({
         await player?.close();
       }
     },
-    [autoSpeak, mode, sending, voiceRate],
+    [autoSpeak, threadId, onSaved, sending, voiceRate],
   );
+
+  const launched = useRef<number | null>(null);
+  useEffect(() => {
+    if (!sending && launch && launched.current !== launch.id) {
+      const timer=setTimeout(()=>{launched.current=launch.id; onConsumed(); void handleSendMessage(launch.text)},0);
+      return ()=>clearTimeout(timer);
+    }
+  }, [launch,handleSendMessage,sending]);
 
   /** 将语音识别结果写入输入框，方便用户确认或编辑后再发送 */
   const appendRecognizedText = useCallback((recognizedText: string) => {
@@ -613,6 +597,7 @@ export default function ChatView({
         durationMs: turn.durationMs,
       },
     ]);
+    onSaved();
     setNowTick(turn.timestampMs);
   }, []);
 
@@ -631,6 +616,7 @@ export default function ChatView({
           ),
         );
       }
+      onSaved();
       if (payload.pendingHabits) {
         setPendingHabits(payload.pendingHabits);
       }
@@ -647,28 +633,9 @@ export default function ChatView({
       setVoiceCallOpen(false);
     });
 
-    const unsubTurnSynced = env.onVoiceCallTurnSynced?.((payload) => {
-      if (payload.userText && payload.assistantReply) {
-        handleVoiceTurnCommitted({
-          turnId: payload.turnId,
-          userText: payload.userText,
-          assistantReply: payload.assistantReply,
-          durationMs: payload.durationMs,
-          timestampMs: payload.timestampMs,
-        });
-      }
-      if (payload.tags || payload.pendingHabits) {
-        handleVoiceArchiveUpdate({
-          turnId: payload.turnId,
-          tags: payload.tags || [],
-          pendingHabits: payload.pendingHabits || [],
-        });
-      }
-    });
-
     return () => {
       unsubForceStop?.();
-      unsubTurnSynced?.();
+
     };
   }, [handleVoiceArchiveUpdate, handleVoiceTurnCommitted]);
 
@@ -756,87 +723,17 @@ export default function ChatView({
   const currentSpeedObj =
     SPEED_OPTIONS.find((s) => s.value === voiceRate) ?? SPEED_OPTIONS[2];
 
-  const currentModeObj =
-    MODE_OPTIONS.find((m) => m.id === mode) ?? MODE_OPTIONS[0];
 
   return (
     <div className="relative h-full flex flex-col bg-[var(--bg-canvas)]">
       {/* 顶部 52px ChatGPT Desktop 极简浮动栏 */}
       <header className="h-[52px] px-4 flex items-center justify-between shrink-0 select-none">
         <div className="flex items-center gap-1.5">
-          {!sidebarOpen && (
-            <button
-              type="button"
-              onClick={onToggleSidebar}
-              title="展开侧边栏 (Ctrl+\)"
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
-            >
-              <IconSidebar className="w-[17px] h-[17px]" />
-            </button>
-          )}
 
-          {/* 模式选择器（仿 ChatGPT Desktop 模型切换下拉按钮） */}
-          <div className="relative" ref={modeMenuRef}>
-            <button
-              type="button"
-              onClick={() => setModeMenuOpen((v) => !v)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
-            >
-              <span className="text-[15px] font-semibold tracking-tight text-[var(--text-primary)]">
-                灵儿
-              </span>
-              <span className="text-[14px] font-normal text-[var(--text-tertiary)]">
-                {currentModeObj.shortTitle}
-              </span>
-              <IconChevronDown
-                className={`w-3.5 h-3.5 text-[var(--text-tertiary)] transition-transform duration-150 ${
-                  modeMenuOpen ? "rotate-180" : ""
-                }`}
-              />
-            </button>
 
-            {modeMenuOpen && (
-              <div
-                className="absolute left-0 top-full mt-1.5 w-[280px] rounded-2xl bg-[var(--bg-elevated)] p-1.5 z-30 animate-popover"
-                style={{ boxShadow: "var(--popover-shadow)" }}
-              >
-                {MODE_OPTIONS.map((opt) => {
-                  const selected = opt.id === mode;
-                  return (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => {
-                        setMode(opt.id);
-                        setModeMenuOpen(false);
-                      }}
-                      className={`w-full text-left px-3 py-2.5 rounded-xl flex items-start justify-between gap-3 transition-colors cursor-pointer ${
-                        selected
-                          ? "bg-[var(--bg-active)]"
-                          : "hover:bg-[var(--bg-hover)]"
-                      }`}
-                    >
-                      <div className="space-y-0.5">
-                        <div className="text-[13.5px] font-medium text-[var(--text-primary)]">
-                          {opt.title}
-                        </div>
-                        <div className="text-[11.5px] leading-snug text-[var(--text-tertiary)]">
-                          {opt.desc}
-                        </div>
-                      </div>
-                      {selected && (
-                        <span className="mt-0.5 text-[var(--text-primary)] shrink-0">
-                          <IconCheck className="w-4 h-4" />
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          <strong className="l-chat-title">对话</strong>
+          <button className="l-text" onClick={onHistory}>全部历史</button>
         </div>
-
         {/* 右侧极简控制：实时语音通话入口 + 语音朗读开关 + 内联语速调节胶囊 */}
         <div className="flex items-center gap-2">
           <Tooltip label="像打电话一样与灵儿实时语音沟通" side="bottom">
@@ -955,7 +852,7 @@ export default function ChatView({
                 欸～今天过得怎么样呀？
               </h2>
               <p className="text-[13.5px] text-[var(--text-tertiary)] mt-2 max-w-md leading-relaxed">
-                直接开口说或打字分享。白天随聊会静默记录习惯与心情，晚上可切换「晚间复盘」一起逐项核对。
+                说说今天的事，或让灵儿和你一起复盘。
               </p>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 w-full max-w-[660px] mt-8">
@@ -1040,17 +937,23 @@ export default function ChatView({
                         {msg.content}
                       </div>
 
+                      {msg.pendingArchive && <button className="l-pill" onClick={async()=>{
+                        try{const result=await api.retryArchive(msg.pendingArchive!);
+                          setMessages(prev=>prev.map(m=>m.id===msg.id?{...m,tags:archiveTags(result),pendingArchive:undefined}:m));onSaved()
+                        }catch(e){setStatusHint(String(e))}
+                      }}>重新整理这条记录</button>}
                       {/* 静默归档微标签 */}
                       {msg.tags && msg.tags.length > 0 && (
                         <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                           {msg.tags.map((tag) => (
-                            <span
+                            <button
+                              disabled={tag === "离线演示回复"} onClick={()=>tag.includes("记忆")?onMemory():onJournal(formatLocalDate(new Date(msg.createdAtMs)))}
                               key={tag}
                               className="inline-flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-full border border-emerald-500/25 bg-emerald-500/8 text-emerald-700 dark:text-emerald-400 font-medium"
                             >
                               <IconCheck className="w-3 h-3" />
                               {tag}
-                            </span>
+                            </button>
                           ))}
                         </div>
                       )}
@@ -1304,9 +1207,10 @@ export default function ChatView({
       {/* 一对一低延迟实时语音通话沉浸层 */}
       {voiceCallOpen && (
         <VoiceCallOverlay
-          mode={mode}
+          mode="normal"
+          threadId={threadId}
           voiceRate={voiceRate}
-          onModeChange={(nextMode) => setMode(nextMode)}
+
           onTurnCommitted={handleVoiceTurnCommitted}
           onArchiveUpdate={handleVoiceArchiveUpdate}
           onClose={handleCloseVoiceCall}

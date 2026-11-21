@@ -5,20 +5,18 @@
  * 右侧：编辑感复盘日记卡片（情绪/精力评分、习惯打卡、每日小确幸罐子）与代码块风格 Markdown 原文预览。
  */
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   api,
   formatLocalDate,
   type DailyLogDetail,
   type MonthlyHeatmapDay,
 } from "../../services/api";
-import type { DashboardViewProps } from "./DashboardLayout";
 import {
   IconCheck,
   IconChevronLeft,
   IconChevronRight,
   IconCopy,
-  IconSidebar,
   IconSparkles,
 } from "./AppleIcons";
 
@@ -40,26 +38,30 @@ function getMonthDaysGrid(
   return cells;
 }
 
-export default function JournalView({
-  sidebarOpen,
-  onToggleSidebar,
-}: DashboardViewProps) {
+export default function JournalView({initialDate}: {initialDate?:string}) {
   const today = new Date();
   const todayStr = formatLocalDate(today);
-  const [year, setYear] = useState(today.getFullYear());
-  const [monthIdx, setMonthIdx] = useState(today.getMonth());
-  const [selectedDate, setSelectedDate] = useState(todayStr);
+  const [year, setYear] = useState(Number(initialDate?.slice(0,4)) || today.getFullYear());
+  const [monthIdx, setMonthIdx] = useState(initialDate ? Number(initialDate.slice(5,7))-1 : today.getMonth());
+  const [selectedDate, setSelectedDate] = useState(initialDate || todayStr);
 
   const [monthMap, setMonthMap] = useState<Record<string, MonthlyHeatmapDay>>(
     {},
   );
+  const [detailOpen,setDetailOpen]=useState(Boolean(initialDate));
+  const selectedRef=useRef(selectedDate);
+  selectedRef.current=selectedDate;
+  const monthRef=useRef("");
   const [detail, setDetail] = useState<DailyLogDetail | null>(null);
+  const [summaryDraft,setSummaryDraft]=useState<string|null>(null);
+  const [error,setError]=useState("");
   const [newHighlight, setNewHighlight] = useState("");
   const [showMarkdown, setShowMarkdown] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const monthStr = `${year}-${String(monthIdx + 1).padStart(2, "0")}`;
 
+  monthRef.current=monthStr;
   const loadMonth = useCallback(async () => {
     try {
       const res = await api.getMonthlyLogs(monthStr);
@@ -67,18 +69,18 @@ export default function JournalView({
       for (const day of res.days) {
         map[day.date] = day;
       }
-      setMonthMap(map);
-    } catch {
-      // ignore
+      if(monthRef.current===monthStr)setMonthMap(map);
+    } catch (e) {
+      setError(String(e));
     }
   }, [monthStr]);
 
   const loadDayDetail = useCallback(async (dateStr: string) => {
     try {
       const res = await api.getDailyLog(dateStr);
-      setDetail(res);
-    } catch {
-      setDetail(null);
+      if(selectedRef.current===dateStr)setDetail(res);
+    } catch(e) {
+      if(selectedRef.current===dateStr){setDetail(null);setError(String(e))}
     }
   }, []);
 
@@ -87,6 +89,7 @@ export default function JournalView({
   }, [loadMonth]);
 
   useEffect(() => {
+    setSummaryDraft(null);setDetail(null);setError("");
     void loadDayDetail(selectedDate);
   }, [loadDayDetail, selectedDate]);
 
@@ -98,10 +101,10 @@ export default function JournalView({
       const updated = await api.upsertDailyLog(selectedDate, {
         [field]: score,
       });
-      setDetail(updated);
+      if(selectedRef.current===updated.date)setDetail(updated);
       await loadMonth();
-    } catch {
-      // ignore
+    } catch (e) {
+      setError(String(e));
     }
   };
 
@@ -109,16 +112,14 @@ export default function JournalView({
     e.preventDefault();
     const trimmed = newHighlight.trim();
     if (!trimmed) return;
-    const nextHighlights = [...(detail?.highlights ?? []), trimmed];
+
     try {
-      const updated = await api.upsertDailyLog(selectedDate, {
-        highlights: nextHighlights,
-      });
-      setDetail(updated);
+      const updated = await api.appendHighlight(selectedDate, trimmed);
+      if(selectedRef.current===updated.date)setDetail(updated);
       setNewHighlight("");
       await loadMonth();
-    } catch {
-      // ignore
+    } catch (e) {
+      setError(String(e));
     }
   };
 
@@ -148,16 +149,7 @@ export default function JournalView({
       {/* 顶部 52px 极简栏 */}
       <header className="h-[52px] px-4 flex items-center justify-between shrink-0 select-none">
         <div className="flex items-center gap-2">
-          {!sidebarOpen && (
-            <button
-              type="button"
-              onClick={onToggleSidebar}
-              title="展开侧边栏 (Ctrl+\)"
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
-            >
-              <IconSidebar className="w-[17px] h-[17px]" />
-            </button>
-          )}
+
           <span className="text-[15px] font-semibold tracking-tight text-[var(--text-primary)] px-1">
             日历与小确幸
           </span>
@@ -192,7 +184,7 @@ export default function JournalView({
 
       {/* 主内容区域 */}
       <div className="flex-1 overflow-y-auto px-5 sm:px-8 pb-10 pt-2">
-        <div className="max-w-[960px] mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <div className={"l-journal-grid max-w-[960px] mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 items-start "+(detailOpen?"detail-open":"")}>
           {/* 左侧：月度打卡热力图日历 */}
           <section className="lg:col-span-5 rounded-2xl bg-[var(--bg-surface)] p-5 border border-[var(--border-subtle)] space-y-4">
             <div className="flex items-center justify-between">
@@ -260,7 +252,7 @@ export default function JournalView({
                   <button
                     key={dateStr}
                     type="button"
-                    onClick={() => setSelectedDate(dateStr)}
+                    onClick={() => {setSelectedDate(dateStr);setDetailOpen(true)}}
                     className={`h-9 rounded-xl text-[12px] tabular-nums flex flex-col items-center justify-center transition-all cursor-pointer relative ${heatClass} ${
                       isSelected
                         ? "ring-2 ring-[var(--ink-primary)] ring-offset-2 ring-offset-[var(--bg-canvas)]"
@@ -296,6 +288,7 @@ export default function JournalView({
 
           {/* 右侧：选中日期复盘详情 */}
           <section className="lg:col-span-7 rounded-2xl bg-[var(--bg-surface)] p-6 border border-[var(--border-subtle)] space-y-6">
+            <button className="l-mobile-back l-text" onClick={()=>setDetailOpen(false)}>‹ 选择日期</button>
             <div className="space-y-1">
               <h3 className="text-[18px] font-semibold tracking-tight text-[var(--text-primary)] tabular-nums">
                 {selectedDate} 复盘日记
@@ -305,6 +298,15 @@ export default function JournalView({
               </p>
             </div>
 
+            {error&&<p className="l-error" role="alert">{error}</p>}
+            {!showMarkdown && detail?.date===selectedDate && <section className="l-editor">
+              {summaryDraft===null ? <><p>{detail.summary || "这一天还没有写下正文。"}</p>
+                <button className="l-pill" onClick={()=>setSummaryDraft(detail.summary)}>编辑日记</button></> :
+                <form onSubmit={async e=>{e.preventDefault();try{const result=await api.upsertDailyLog(selectedDate,{summary:summaryDraft});if(selectedRef.current===result.date){setDetail(result);setSummaryDraft(null)}await loadMonth()}catch(e){setError(String(e))}}}>
+                  <textarea autoFocus aria-label="日记正文" value={summaryDraft} onChange={e=>setSummaryDraft(e.target.value)}/>
+                  <button className="l-primary">保存正文</button> <button type="button" className="l-pill" onClick={()=>setSummaryDraft(null)}>取消</button>
+                </form>}
+            </section>}
             {showMarkdown ? (
               /* ChatGPT 代码块风格 Markdown 原文预览 */
               <div className="rounded-xl border border-[var(--border-subtle)] overflow-hidden bg-[var(--bg-subtle)]/60">

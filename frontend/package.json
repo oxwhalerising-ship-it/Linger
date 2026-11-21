@@ -2,7 +2,7 @@
   "name": "linger-frontend",
   "version": "0.4.0",
   "private": true,
-  "description": "灵儿，台湾腔治愈系桌面小管家（Electron + React + Vite）",
+  "description": "灵儿",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {

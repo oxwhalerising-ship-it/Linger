@@ -27,6 +27,9 @@ const {
   readAuthToken,
 } = require("./backendHost.cjs");
 
+// Windows 默认会画出 File / Edit / View 菜单栏。启动时清掉，两个窗口都不再出现。
+Menu.setApplicationMenu(null);
+
 let petWindow = null;
 let dashboardWindow = null;
 let tray = null;
@@ -983,7 +986,10 @@ function openDashboardWindow() {
     height: 720,
     minWidth: 780,
     minHeight: 560,
-    title: "灵儿 — 台湾腔治愈系小管家",
+    title: "",
+    titleBarStyle: "hidden",
+    titleBarOverlay: { color: "#00000000", symbolColor: "#657395", height: 30 },
+    autoHideMenuBar: true,
     icon: loadAppIcon(),
     backgroundColor: "#ffffff",
     webPreferences: {
@@ -992,10 +998,16 @@ function openDashboardWindow() {
       preload: path.join(__dirname, "preload.cjs"),
     },
   });
+  dashboardWindow.setMenu(null);
+  dashboardWindow.setMenuBarVisibility(false);
+  dashboardWindow.setTitle("");
   dashboardWindow.setIcon(loadAppIcon());
 
   dashboardWindow.on("page-title-updated", (event) => {
     event.preventDefault();
+    if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+      dashboardWindow.setTitle("");
+    }
   });
 
   attachWindowSecurityGuards(dashboardWindow);
@@ -1159,7 +1171,7 @@ function refreshTrayMenu() {
       },
     },
     {
-      label: "免打扰模式（静音）",
+      label: "免打扰模式（静音并关闭唤醒）",
       type: "checkbox",
       checked: isDndEnabled,
       click: (menuItem) => {
@@ -1186,7 +1198,7 @@ function refreshTrayMenu() {
 function setupTray() {
   const icon = createTrayIcon();
   tray = new Tray(icon);
-  tray.setToolTip("灵儿 — 台湾腔治愈系小管家");
+  tray.setToolTip("灵儿 — 治愈系小管家");
   refreshTrayMenu();
 
   // 左键单击托盘图标直接打开主控面板

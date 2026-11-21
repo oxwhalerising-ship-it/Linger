@@ -23,7 +23,6 @@ import {
 } from "../../services/petApi";
 import AvatarRenderer from "../pet/AvatarRenderer";
 import Tooltip from "./Tooltip";
-import type { DashboardViewProps } from "./DashboardLayout";
 import {
   IconCheck,
   IconCopy,
@@ -31,7 +30,6 @@ import {
   IconPhone,
   IconPlus,
   IconSearch,
-  IconSidebar,
   IconTrash,
   IconVolumeOn,
 } from "./AppleIcons";
@@ -44,10 +42,7 @@ function formatDurationBadge(durationMs?: number | null): string | null {
   return sec < 60 ? `${sec.toFixed(1)}s` : `${Math.floor(sec / 60)}m${Math.round(sec % 60)}s`;
 }
 
-export default function HistoryView({
-  sidebarOpen,
-  onToggleSidebar,
-}: DashboardViewProps) {
+export default function HistoryView() {
   const [summary, setSummary] = useState<MessagesSummaryData>({
     totals: { all: 0, text: 0, voice: 0 },
     dates: [],
@@ -340,16 +335,7 @@ export default function HistoryView({
       {/* 顶部 52px 极简栏：标题 + 文本/语音分区切换 + 新增记录按钮 */}
       <header className="h-[52px] px-4 flex items-center justify-between gap-3 shrink-0 select-none border-b border-[var(--border-subtle)]">
         <div className="flex items-center gap-2 min-w-0">
-          {!sidebarOpen && (
-            <button
-              type="button"
-              onClick={onToggleSidebar}
-              title="展开侧边栏 (Ctrl+\)"
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
-            >
-              <IconSidebar className="w-[17px] h-[17px]" />
-            </button>
-          )}
+
           <span className="text-[15px] font-semibold tracking-tight text-[var(--text-primary)] px-1 truncate">
             历史消息
           </span>

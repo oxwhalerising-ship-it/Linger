@@ -4,11 +4,12 @@
 提供每日习惯与关注事项的增删改查接口。
 """
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
 
+from app.core.utils import validate_date_str
 from app.database import db_cursor
-from app.schemas import HabitCreate, HabitOut, HabitUpdate
+from app.schemas import HabitBoardOut, HabitCreate, HabitDayMark, HabitOut, HabitUpdate
 
 router = APIRouter(prefix="/api/habits", tags=["Habits"])
 
@@ -24,6 +25,57 @@ def _row_to_habit(row) -> HabitOut:
         is_active=bool(row["is_active"]),
         created_at=row["created_at"],
     )
+
+
+def _streak(marks: dict[str, str], today: date) -> int:
+    """连续完成天数。今天还没打卡时从昨天往回数；明确记成未做则当天就断开。"""
+    status = marks.get(today.isoformat())
+    if status == "missed":
+        return 0
+    cursor = today if status in ("done", "partial") else today - timedelta(days=1)
+    count = 0
+    while marks.get(cursor.isoformat()) in ("done", "partial"):
+        count += 1
+        cursor -= timedelta(days=1)
+        if count > 400:
+            break
+    return count
+
+
+@router.get("/board", response_model=HabitBoardOut)
+def habit_board(date_str: str = Query(alias="date")):
+    """习惯页用的一周圆点和连续天数。完成或部分都算保住连续。"""
+    day = date.fromisoformat(validate_date_str(date_str))
+    week = [day - timedelta(days=offset) for offset in range(6, -1, -1)]
+    lookback = (day - timedelta(days=400)).isoformat()
+    with db_cursor() as cur:
+        cur.execute("SELECT * FROM habits ORDER BY is_active DESC, id ASC;")
+        habits = cur.fetchall()
+        cur.execute(
+            """
+            SELECT habit_id, date, status FROM habit_records
+            WHERE date >= ? AND date <= ?;
+            """,
+            (lookback, day.isoformat()),
+        )
+        marks: dict[int, dict[str, str]] = {}
+        for row in cur.fetchall():
+            marks.setdefault(row["habit_id"], {})[row["date"]] = row["status"]
+    items = []
+    for habit in habits:
+        history = marks.get(habit["id"], {})
+        items.append(
+            {
+                **_row_to_habit(habit).model_dump(),
+                "today_status": history.get(day.isoformat()),
+                "streak": _streak(history, day),
+                "week": [
+                    HabitDayMark(date=item.isoformat(), status=history.get(item.isoformat()))
+                    for item in week
+                ],
+            }
+        )
+    return HabitBoardOut(date=day.isoformat(), items=items)
 
 
 @router.get("", response_model=list[HabitOut])

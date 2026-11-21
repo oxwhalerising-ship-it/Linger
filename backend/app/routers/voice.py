@@ -238,8 +238,22 @@ def wakeword_status():
 
 @router.post("/wakeword/toggle")
 async def toggle_wakeword(payload: WakewordToggleRequest):
-    """开启/关闭本地离线语音唤醒并保存自定义唤醒词"""
+    """开启/关闭本地离线语音唤醒并保存自定义唤醒词。
+
+    免打扰开着时不允许重新打开唤醒，避免刚被关掉的监听又被拉起来。
+    """
+    from app.services.scheduler_service import load_schedule_settings
+
     loop = asyncio.get_running_loop()
+    if payload.enabled and load_schedule_settings().get("dnd_enabled"):
+        status = await asyncio.to_thread(
+            wakeword_engine.toggle,
+            False,
+            payload.keyword,
+            loop,
+        )
+        status["blocked_by_dnd"] = True
+        return status
     return await asyncio.to_thread(
         wakeword_engine.toggle,
         payload.enabled,

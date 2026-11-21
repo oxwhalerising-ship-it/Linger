@@ -6,7 +6,8 @@
    - 4 个固定每日作息节点：早安规划、午间提醒、晚间复盘、睡前催睡
    - 每日活跃时段内的 1~3 次「随机冒泡」主动关心
 2. 支持点击「稍后再聊（默认 15 分钟后）」动态创建一次性延后任务（DateTrigger）。
-3. 支持一键切换免打扰（DND）模式，免打扰期间所有定时与随机提醒均静默跳过。
+3. 支持一键切换免打扰（DND）模式。免打扰期间所有定时与随机提醒均静默跳过，
+   开启时还会关闭并停止离线语音唤醒；关掉免打扰不会自动把唤醒打开。
 4. 触发时结合当日待核对习惯与台湾腔暖心语库，通过 WebSocket `/ws/events` 推送给桌宠。
 """
 
@@ -18,6 +19,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
+from app.core.settings_store import invalidate_settings_cache
 from app.database import DEFAULT_SETTINGS, db_cursor
 from app.services.event_bus import event_bus
 from app.services.tts_provider import split_sentences_for_streaming
@@ -72,6 +74,7 @@ def set_dnd_enabled(enabled: bool) -> dict[str, Any]:
             """,
             (json.dumps(cfg, ensure_ascii=False), now_iso),
         )
+    invalidate_settings_cache()
     return cfg
 
 

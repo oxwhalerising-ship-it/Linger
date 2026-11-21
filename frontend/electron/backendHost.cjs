@@ -131,6 +131,8 @@ function systemPython() {
 }
 
 async function ensurePackagedPython(backendDir) {
+  const bundled = path.join(process.resourcesPath, "python", "python.exe");
+  if (fs.existsSync(bundled)) return bundled;
   const venvPython = path.join(app.getPath("userData"), "venv", "Scripts", "python.exe");
   if (fs.existsSync(venvPython)) return venvPython;
   const system = systemPython();

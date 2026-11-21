@@ -170,7 +170,7 @@ export default function PetRadialMenu({
   const items: OrbitItem[] = [
     {
       id: "dnd",
-      label: dndEnabled ? "关闭免打扰" : "免打扰模式",
+      label: dndEnabled ? "关闭免打扰" : "免打扰（关闭唤醒）",
       angleDeg: -170,
       active: dndEnabled,
       onClick: onToggleDnd,

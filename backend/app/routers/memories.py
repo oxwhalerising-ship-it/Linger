@@ -16,6 +16,7 @@ router = APIRouter(prefix="/api/memories", tags=["Memories"])
 
 def _row_to_memory(row) -> MemoryOut:
     return MemoryOut(
+        source_message_id=row["source_message_id"],
         id=row["id"],
         memory_type=row["memory_type"],
         content=row["content"],
@@ -68,3 +69,13 @@ def delete_memory(memory_id: int):
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="找不到对应的记忆记录")
     return {"deleted": True, "memory_id": memory_id}
+
+@router.patch("/{memory_id}", response_model=MemoryOut)
+def edit_memory(memory_id: int, payload: MemoryCreate):
+    with db_cursor() as cur:
+        cur.execute("UPDATE memories SET content=?, memory_type=?, follow_up_date=? WHERE id=?",
+                    (payload.content, payload.memory_type, payload.follow_up_date, memory_id))
+        row = cur.execute("SELECT * FROM memories WHERE id=?", (memory_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "记忆已删除")
+        return _row_to_memory(row)

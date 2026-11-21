@@ -147,7 +147,13 @@ def _collect_period_stats(start_date: str, end_date: str) -> dict[str, Any]:
         else 0.0
     )
 
+    daily_done: dict[str, int] = {}
+    for record in record_rows:
+        if record["status"] == "done":
+            key = record["date"]
+            daily_done[key] = daily_done.get(key, 0) + 1
     return {
+        "daily_done": daily_done,
         "start_date": start_date,
         "end_date": end_date,
         "total_days": total_days,
@@ -290,6 +296,12 @@ def _export_report_markdown(
     target_dir = WEEKLY_NOTES_DIR if period_type == "weekly" else MONTHLY_NOTES_DIR
     md_path = target_dir / f"{file_stem}.md"
 
+    md_path.write_text(render_report_markdown(period_type, file_stem, stats, analysis_md,
+                        datetime.now().isoformat(timespec="seconds")), encoding="utf-8")
+    return md_path
+
+
+def render_report_markdown(period_type: str, file_stem: str, stats: dict, analysis_md: str, generated_at: str) -> str:
     title_label = "每周成长复盘" if period_type == "weekly" else "每月成长复盘"
     lines: list[str] = [
         "---",
@@ -300,14 +312,14 @@ def _export_report_markdown(
         f"completion_rate: {stats['overall_completion_rate']}",
         f"avg_mood: {stats['avg_mood'] if stats['avg_mood'] is not None else 'null'}",
         f"avg_energy: {stats['avg_energy'] if stats['avg_energy'] is not None else 'null'}",
-        f"generated_at: {datetime.now().isoformat(timespec='seconds')}",
+        f"generated_at: {generated_at}",
         "---",
         "",
         f"# {file_stem} {title_label}",
         "",
         f"> 统计区间：`{stats['start_date']}` ~ `{stats['end_date']}`｜记录天数：`{stats['logged_days']}/{stats['total_days']}` 天｜综合习惯达成率：`{stats['overall_completion_rate']}%`",
         "",
-        "## 灵儿的台湾腔复盘点评",
+        "## 灵儿的复盘点评",
         "",
         analysis_md,
         "",
@@ -323,8 +335,9 @@ def _export_report_markdown(
     else:
         lines.append("- 暂无习惯记录")
 
-    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return md_path
+    lines.extend(["", "## 小确幸", ""])
+    lines.extend(f"- {h['date']} · {h['text']}" for h in stats["highlights"])
+    return "\n".join(lines) + "\n"
 
 
 def generate_period_report(

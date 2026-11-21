@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.local_auth import LocalTokenMiddleware, ensure_local_token
 from app.core.logging import get_logger
 from app.database import init_db
-from app.routers import chat, habits, logs, memories, reports, schedule, settings, voice, voice_call
+from app.routers import chat, focus, habits, logs, memories, reports, schedule, settings, tasks, voice, voice_call
 from app.services.llm.client import close_all_llm_clients
 from app.services.model_catalog import start_model_download_if_missing
 from app.services.scheduler_service import shutdown_scheduler, start_scheduler
@@ -45,7 +45,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="灵儿本地后端",
-    description="台湾腔治愈系桌面小管家的本地 API",
+    description="治愈系桌面小管家的本地 API",
     version="0.4.0",
     lifespan=lifespan,
 )
@@ -66,6 +66,8 @@ app.add_middleware(
 
 # 注册核心业务路由
 app.include_router(habits.router)
+app.include_router(tasks.router)
+app.include_router(focus.router)
 app.include_router(logs.router)
 app.include_router(memories.router)
 app.include_router(reports.router)
