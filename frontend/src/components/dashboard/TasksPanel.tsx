@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, formatLocalDate, type TaskItem } from "../../services/api";
+import { isNetworkFetchError } from "../../services/api/client";
 
 type Scope = "today" | "later" | "done";
 
@@ -16,6 +17,10 @@ export default function TasksPanel() {
       setItems(await api.listTasks(scope, today));
       setError("");
     } catch (err) {
+      if (isNetworkFetchError(err)) {
+        setError("");
+        return;
+      }
       setError(err instanceof Error ? err.message : "任务没有加载出来");
     }
   }, [scope, today]);
@@ -27,7 +32,13 @@ export default function TasksPanel() {
   useEffect(() => {
     const onPlan = () => void load();
     window.addEventListener("linger-plan", onPlan);
-    return () => window.removeEventListener("linger-plan", onPlan);
+    window.addEventListener("linger-data-changed", onPlan);
+    window.addEventListener("linger-backend-ready", onPlan);
+    return () => {
+      window.removeEventListener("linger-plan", onPlan);
+      window.removeEventListener("linger-data-changed", onPlan);
+      window.removeEventListener("linger-backend-ready", onPlan);
+    };
   }, [load]);
 
   async function run(work: () => Promise<unknown>) {

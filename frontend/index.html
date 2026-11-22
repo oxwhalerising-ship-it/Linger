@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="./linger/app_icon.png" />
     <title></title>
+    <script>
+      if (new URLSearchParams(window.location.search).get("window") === "pet") {
+        document.documentElement.classList.add("pet-mode");
+        document.documentElement.style.background = "transparent";
+      }
+    </script>
   </head>
   <body class="antialiased">
     <div id="root"></div>

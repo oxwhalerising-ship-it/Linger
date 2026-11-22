@@ -19,6 +19,13 @@ export type ChatMode =
   | "bedtime_nudge"
   | "random_bubble";
 
+export interface ToolActionEvent {
+  tool: string;
+  ok: boolean;
+  badge?: string | null;
+  error?: string | null;
+}
+
 export interface ChatResponseData {
   archive_failed?:boolean;
   source_id?:number;
@@ -28,6 +35,7 @@ export interface ChatResponseData {
   emotion: PetEmotion;
   duration_ms?: number | null;
   used_offline_fallback: boolean;
+  tool_actions?: ToolActionEvent[];
   extracted: {
     summary_updated?:boolean;
     habit_updates?: Array<{
@@ -49,12 +57,14 @@ export interface ChatStreamHandlers {
   threadId?:string;
   signal?: AbortSignal;
   onSentence?: (sentence: string, index: number) => void;
+  onToolAction?: (action: ToolActionEvent) => void;
   onReply?: (reply: {
     reply: string;
     sentences: string[];
     emotion: PetEmotion;
     duration_ms?: number | null;
     used_offline_fallback: boolean;
+    tool_actions?: ToolActionEvent[];
   }) => void;
 }
 
@@ -110,6 +120,13 @@ export async function sendQuickChat(
       const data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
       if (event === "sentence" && typeof data.text === "string") {
         handlers?.onSentence?.(data.text, Number(data.index ?? 0));
+      } else if (event === "tool_action") {
+        handlers?.onToolAction?.({
+          tool: String(data.tool ?? ""),
+          ok: Boolean(data.ok),
+          badge: typeof data.badge === "string" ? data.badge : null,
+          error: typeof data.error === "string" ? data.error : null,
+        });
       } else if (event === "reply") {
         handlers?.onReply?.({
           reply: String(data.reply ?? ""),
@@ -117,6 +134,9 @@ export async function sendQuickChat(
           emotion: (data.emotion as PetEmotion) || "happy",
           duration_ms: typeof data.duration_ms === "number" ? data.duration_ms : null,
           used_offline_fallback: Boolean(data.used_offline_fallback),
+          tool_actions: Array.isArray(data.tool_actions)
+            ? (data.tool_actions as ToolActionEvent[])
+            : undefined,
         });
       } else if (event === "error") {
         throw new Error(String(data.detail || "对话中断了"));

@@ -13,6 +13,7 @@ module.exports = {
   PET_TOGGLE_VISIBILITY: "pet:toggle-visibility",
   PET_PREVIEW_STATE: "pet:preview-state",
   PET_SET_DND: "pet:set-dnd",
+  PET_READY: "pet:ready",
 
   // Main -> Pet
   PET_DOCK_STATE_CHANGED: "pet:dock-state-changed",

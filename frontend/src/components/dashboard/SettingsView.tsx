@@ -872,7 +872,7 @@ export default function SettingsView({initialSection="general"}:{initialSection?
                           }}
                           className={`group flex flex-col items-center justify-center rounded-xl p-2 border transition-all cursor-pointer ${
                             active
-                              ? "border-sky-500 bg-sky-500/10 shadow-sm"
+                              ? "border-[var(--ink-primary)] bg-[var(--bg-active)] shadow-sm"
                               : "border-[var(--border-subtle)] bg-[var(--bg-subtle)]/60 hover:bg-[var(--bg-subtle)]"
                           }`}
                         >

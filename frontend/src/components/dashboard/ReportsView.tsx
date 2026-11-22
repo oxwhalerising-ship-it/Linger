@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api, formatLocalDate, type ReportItem } from "../../services/api";
+import { isNetworkFetchError } from "../../services/api/client";
 import { Trend } from "./CompanionPages";
 export default function ReportsView({ endDate, initialPeriod }: {
   endDate: string;
@@ -10,17 +11,23 @@ export default function ReportsView({ endDate, initialPeriod }: {
   const label = initialPeriod === "weekly" ? "周报" : "月报";
   useEffect(() => {
     let live = true;
-    api.listReports().then(({ reports }) => {
-      if (live) {
-        setReports(reports);
-        setSelected(current => current ?? reports.find(r => r.end_date === endDate && r.period_type === initialPeriod) ?? null);
-      }
-    }).catch(e => {
-      if (live)
-        setError(String(e));
-    });
+    const load = () => {
+      api.listReports().then(({ reports }) => {
+        if (live) {
+          setError("");
+          setReports(reports);
+          setSelected(current => current ?? reports.find(r => r.end_date === endDate && r.period_type === initialPeriod) ?? null);
+        }
+      }).catch(e => {
+        if (live && !isNetworkFetchError(e))
+          setError(String(e));
+      });
+    };
+    load();
+    window.addEventListener("linger-backend-ready", load);
     return () => {
       live = false;
+      window.removeEventListener("linger-backend-ready", load);
     };
   }, [endDate, initialPeriod]);
   async function generate() {

@@ -29,6 +29,9 @@ from app.services.llm.client import (
     create_async_completion_fast as _create_async_completion_fast,
     get_async_openai_client as _get_async_openai_client,
     get_openai_client as _get_openai_client,
+    is_tools_unsupported_error as _is_tools_unsupported_error,
+    mark_tools_unsupported as _mark_tools_unsupported,
+    model_supports_tools as _model_supports_tools,
 )
 from app.services.llm.text_pipeline import (
     IncrementalSentenceSplitter,
@@ -36,6 +39,7 @@ from app.services.llm.text_pipeline import (
     infer_reply_emotion,
 )
 from app.services.markdown_exporter import export_daily_markdown
+from app.services.tools import ToolContext, tool_registry
 from app.services.tts_provider import split_sentences_for_streaming
 
 logger = get_logger("agent_brain")
@@ -123,6 +127,19 @@ def _load_daily_context(date_str: str, thread_id: str | None = None) -> dict[str
         )
         highlights = [dict(r) for r in cur.fetchall()]
 
+        # 6. 今日待办任务（含逾期未完成，供灵儿绑定番茄钟或核对进度）
+        cur.execute(
+            """
+            SELECT id, title, important, due_date
+            FROM tasks
+            WHERE status = 'open' AND due_date IS NOT NULL AND due_date <= ?
+            ORDER BY important DESC, due_date ASC, id ASC
+            LIMIT 12;
+            """,
+            (date_str,),
+        )
+        today_tasks = [dict(r) for r in cur.fetchall()]
+
     pending_habits = [h for h in habits if h["today_status"] is None]
     recorded_habits = [h for h in habits if h["today_status"] is not None]
 
@@ -131,6 +148,7 @@ def _load_daily_context(date_str: str, thread_id: str | None = None) -> dict[str
         "pending_habits": pending_habits,
         "recorded_habits": recorded_habits,
         "today_log": today_log,
+        "today_tasks": today_tasks,
         "recent_messages": recent_messages,
         "active_memories": active_memories,
         "highlights": highlights,
@@ -572,8 +590,10 @@ def _build_voice_call_system_prompt(
     ctx: dict[str, Any],
     mode: str,
     date_str: str,
+    *,
+    enable_tools: bool = True,
 ) -> str:
-    """构建实时语音通话专用 Prompt：纯自然台湾腔短口语（无 JSON、无 Markdown，极速出首字）"""
+    """构建实时语音通话与流式对话共用 Prompt：纯自然台湾腔短口语 + 控制面板工具调度规则"""
     bot_name = settings.get("bot_name", "灵儿")
     persona = settings.get("persona", {})
     style_desc = persona.get(
@@ -588,8 +608,14 @@ def _build_voice_call_system_prompt(
     habit_lines = []
     for h in ctx["habits"]:
         status_text = h["today_status"] if h["today_status"] else "尚未记录"
-        habit_lines.append(f"- {h['title']}（今日：{status_text}）")
+        habit_lines.append(f"- [ID:{h['id']}] {h['title']}（今日：{status_text}）")
     habits_block = "\n".join(habit_lines) if habit_lines else "（暂未配置习惯）"
+
+    task_lines = []
+    for t in ctx.get("today_tasks") or []:
+        star = "★重要 " if t.get("important") else ""
+        task_lines.append(f"- [ID:{t['id']}] {star}{t['title']}")
+    tasks_block = "\n".join(task_lines) if task_lines else "（今日暂无未完成待办）"
 
     mem_lines = [f"- {m['content']}" for m in ctx["active_memories"][:5]]
     memories_block = "\n".join(mem_lines) if mem_lines else "（暂无）"
@@ -597,12 +623,31 @@ def _build_voice_call_system_prompt(
     mode_hint = (
         "现在正在进行【晚间复盘语音通话】：温柔肯定已完成项，自然口头核对尚未记录的习惯，快聊完时顺口问一句今天的小确幸。"
         if mode == "evening_review"
-        else "现在正在进行【一对一实时语音通话】：像好朋友讲电话一样轻松自然聊天，顺口接住情绪、给鼓励，不要审问。"
+        else "现在正在进行【一对一实时陪伴对话】：像好朋友讲电话一样轻松自然聊天，顺口接住情绪、给鼓励，不要审问。"
     )
 
-    return f"""你是用户的专属治愈系好朋友兼小管家「{bot_name}」，目前正在跟用户【一对一实时讲电话】。
+    tools_section = ""
+    if enable_tools:
+        tools_section = """
+## 随手帮用户操作控制面板（工具使用铁律）
+你拥有控制面板工具，当用户有实际记录、查询或操控意图时请**直接调用工具执行**，不要只口头答应：
+1. **口述今日事项智能拆解**：当用户跟你分享今天做了什么、让你帮忙记下来时，可**一次调用多个工具**联动入库：
+   - 做的事/经历/心情/小确幸 -> 调用 `record_daily_log`（提炼成清晰自然的摘要，顺带记录明显的情绪/精力分和小确幸）；
+   - 提到完成了某项预设习惯（对照上方习惯清单 ID）-> 调用 `checkin_habit` 自动打卡；
+   - 提到接下来/明天要做的事 -> 调用 `create_task` 加入待办，或已完成某项待办 -> 调用 `update_task`；
+   - 提到值得长期记住的喜好或后续要关心的事 -> 调用 `save_memory`。
+2. **番茄钟与专注控制**：用户说想开番茄钟、专注 X 分钟、开始正计时、暂停/继续/结束/跳过休息、或查专注情况时，调用 `control_focus_timer` 或 `get_focus_overview`（支持 1~180 任意自定义分钟数，并尽量帮用户匹配绑定对应待办任务）。
+   - 若 `control_focus_timer` 返回 `conflict: true`，说明面板已有计时在跑，**绝不擅自覆盖**，请温柔告知当前剩余时间，问用户要继续现在的还是重新开一个新的（用户确认重开后再传 `force=true`）。
+3. **打开页面**：用户说打开日记/待办/习惯/番茄钟/记忆/设置页时，调用 `open_dashboard_page`。
+4. **安全与纯口语原则**：
+   - 仅普通闲聊寒暄时不要画蛇添足乱调工具；
+   - 暂不支持永久删除任务或记忆，若用户要求删除，温柔说明请到控制面板里手动点删除；
+   - 工具执行完后，**只用自然台湾腔短口语确认结果**，绝对不要念出工具名、参数名、ID 或 JSON。
+"""
 
-## 电话口语铁律（务必严格遵守！）
+    return f"""你是用户的专属治愈系好朋友兼小管家「{bot_name}」，目前正在跟用户【一对一实时对话】。
+
+## 口语铁律（务必严格遵守！）
 1. 性格与口吻：{style_desc}；说中文时自然融入台湾腔语助词（欸～、吼、喔、啦、耶、捏、齁）与口头禅（{', '.join(catchphrases[:6])}）。
 2. **中英自然切换**：如果用户用英文跟你说话，或明确想用英文聊天/练口语，请直接用**自然、温暖、俏皮的日常英文口语**回复（不要翻成中文），同样保持 1～3 句简短对话节奏；用户说中文时则切回地道台湾腔。
 3. **极简电话节奏**：每次只说 **1～3 句简短口语**（中文约 18～68 字，英文约 12～40 词），先短促回应接住情绪，再自然抛一个小互动，像真实讲电话一样有来有往。
@@ -613,12 +658,15 @@ def _build_voice_call_system_prompt(
 {mode_hint}
 若用户请你复盘或正在回答上一项复盘提问，每轮只核对一项尚未确认的习惯；用户换话题时，直接回应新话题。
 
-## 用户今日习惯状态（仅供聊天参考，顺口提到即可）
+## 用户今日习惯状态
 {habits_block}
+
+## 用户今日未完成待办
+{tasks_block}
 
 ## 近期记得的事
 {memories_block}
-"""
+{tools_section}"""
 
 
 def _filter_history_for_llm(recent_messages: list[dict[str, Any]], limit: int = 10) -> list[dict[str, str]]:
@@ -635,15 +683,28 @@ def _filter_history_for_llm(recent_messages: list[dict[str, Any]], limit: int = 
     return cleaned[-limit:]
 
 
-async def stream_voice_call_reply(
+def _get_field(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+async def stream_agent_turn(
     user_message: str,
     date_str: str | None = None,
     mode: str = "normal",
     thread_id: str | None = None,
-) -> AsyncIterator[str]:
+    *,
+    channel: str = "text",
+    enable_tools: bool = True,
+    max_tool_rounds: int = 3,
+) -> AsyncIterator[dict[str, Any]]:
     """
-    主轨极速流式对话生成器：
-    直接以 stream=True 从 LLM 逐字产出纯台湾腔口语文本，不等待完整 JSON 闭合。
+    统一流式 Agentic Tool Calling 主轨（文字流式 / 同步对话 / 实时语音通话共用）：
+    - 普通闲聊：零额外开销，直接逐字流式产出 `text_delta`。
+    - 触发工具：流式拼装 OpenAI `tool_calls`，首发工具名立刻产出 `tool_start`（附带台湾腔垫场语音提示），
+      执行工具后产出 `tool_result`（附带前端轻量回执标签），回填工具结果进入下一轮流式回复。
+    - 多模型兼容：若所配模型/中转不支持 `tools`，自动缓存降级为纯流式对话，绝不崩溃。
     """
     today_str = date_str or datetime.now().strftime("%Y-%m-%d")
     settings = _load_settings_dict()
@@ -657,33 +718,218 @@ async def stream_voice_call_reply(
 
     if not api_key:
         fallback = _offline_fallback_response(user_message, ctx, mode, bot_name)
-        yield str(fallback.get("reply") or "欸～我在听喔，先去设置页填上 API Key，我就能跟你畅快讲电话啦！")
+        reply = str(fallback.get("reply") or "欸～我在听喔，先去设置页填上 API Key，我就能跟你畅快聊天啦！")
+        yield {"type": "text_delta", "delta": reply}
+        yield {
+            "type": "turn_meta",
+            "tool_events": [],
+            "archive_skip_keys": [],
+            "tools_degraded": False,
+        }
         return
 
-    system_prompt = _build_voice_call_system_prompt(settings, ctx, mode, today_str)
-    chat_messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    openai_tools = tool_registry.to_openai_tools() if enable_tools else []
+    use_tools = bool(enable_tools and openai_tools and _model_supports_tools(base_url, model_name))
+    tools_degraded = bool(enable_tools and openai_tools and not use_tools)
+
+    system_prompt = _build_voice_call_system_prompt(
+        settings, ctx, mode, today_str, enable_tools=use_tools
+    )
+    chat_messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
     chat_messages.extend(_filter_history_for_llm(ctx["recent_messages"], limit=10))
     chat_messages.append({"role": "user", "content": user_message})
 
     client = _get_async_openai_client(api_key=api_key, base_url=base_url)
-    # 注意：GLM-5.3 等始终思考模型的 reasoning_content 与 content 共享 max_tokens，
-    # 必须留足 >= 1024 预算（正文长度靠 System Prompt 约束在 1~3 句），避免思考耗尽额度导致正文为空！
-    base_kwargs: dict[str, Any] = {
-        "model": model_name,
-        "messages": chat_messages,
-        "temperature": 0.8,
-        "max_tokens": 1024,
-        "stream": True,
-    }
-    stream = await _create_async_completion_fast(client, base_kwargs, base_url, model_name)
+    tool_ctx = ToolContext(
+        date_str=today_str,
+        thread_id=thread_id,
+        mode=mode,
+        channel=channel,
+    )
 
-    async for chunk in stream:
-        if not chunk.choices:
-            continue
-        delta_obj = chunk.choices[0].delta
-        piece = getattr(delta_obj, "content", None)
-        if piece:
-            yield piece
+    tool_events: list[dict[str, Any]] = []
+    archive_skip_keys: set[str] = set()
+    emitted_filler_for_turn = False
+
+    for round_idx in range(max(1, max_tool_rounds) + 1):
+        allow_tools_this_round = use_tools and round_idx < max_tool_rounds
+        base_kwargs: dict[str, Any] = {
+            "model": model_name,
+            "messages": chat_messages,
+            "temperature": 0.8,
+            "max_tokens": 1024,
+            "stream": True,
+        }
+        if allow_tools_this_round:
+            base_kwargs["tools"] = openai_tools
+            base_kwargs["tool_choice"] = "auto"
+
+        try:
+            stream = await _create_async_completion_fast(client, base_kwargs, base_url, model_name)
+        except Exception as exc:
+            status_code = getattr(exc, "status_code", None)
+            if allow_tools_this_round and (
+                _is_tools_unsupported_error(exc) or status_code in (400, 422, 501)
+            ):
+                logger.warning(
+                    "模型 %s (%s) 不支持流式 Tool Calling，已自动降级为纯对话模式: %s",
+                    model_name,
+                    base_url,
+                    str(exc)[:180],
+                )
+                _mark_tools_unsupported(base_url, model_name)
+                use_tools = False
+                tools_degraded = True
+                chat_messages[0] = {
+                    "role": "system",
+                    "content": _build_voice_call_system_prompt(
+                        settings, ctx, mode, today_str, enable_tools=False
+                    ),
+                }
+                base_kwargs.pop("tools", None)
+                base_kwargs.pop("tool_choice", None)
+                stream = await _create_async_completion_fast(client, base_kwargs, base_url, model_name)
+            else:
+                raise
+
+        round_text_parts: list[str] = []
+        assembled_calls: dict[int, dict[str, str]] = {}
+
+        async for chunk in stream:
+            choices = _get_field(chunk, "choices") or []
+            if not choices:
+                continue
+            delta_obj = _get_field(choices[0], "delta")
+            if delta_obj is None:
+                continue
+
+            piece = _get_field(delta_obj, "content")
+            if piece:
+                round_text_parts.append(piece)
+                yield {"type": "text_delta", "delta": piece}
+
+            delta_tool_calls = _get_field(delta_obj, "tool_calls") or []
+            for tc in delta_tool_calls:
+                idx_raw = _get_field(tc, "index", 0)
+                idx = int(idx_raw) if idx_raw is not None else 0
+                entry = assembled_calls.setdefault(
+                    idx,
+                    {"id": "", "name": "", "arguments": ""},
+                )
+                tc_id = _get_field(tc, "id")
+                if tc_id:
+                    entry["id"] = str(tc_id)
+                fn_obj = _get_field(tc, "function")
+                if fn_obj is not None:
+                    fn_name = _get_field(fn_obj, "name")
+                    if fn_name:
+                        entry["name"] += str(fn_name)
+                        if not emitted_filler_for_turn:
+                            spec = tool_registry.get(entry["name"])
+                            if spec is not None:
+                                emitted_filler_for_turn = True
+                                yield {
+                                    "type": "tool_start",
+                                    "tool_name": spec.name,
+                                    "filler_hint": spec.filler_hint,
+                                }
+                    fn_args = _get_field(fn_obj, "arguments")
+                    if fn_args:
+                        entry["arguments"] += str(fn_args)
+
+        if not assembled_calls:
+            break
+
+        ordered_calls = [
+            assembled_calls[idx]
+            for idx in sorted(assembled_calls.keys())
+            if assembled_calls[idx]["name"].strip()
+        ]
+        if not ordered_calls:
+            break
+
+        assistant_tool_calls_payload = []
+        for pos, call in enumerate(ordered_calls):
+            call_id = call["id"] or f"call_{round_idx}_{pos}"
+            call["id"] = call_id
+            assistant_tool_calls_payload.append(
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": call["name"].strip(),
+                        "arguments": call["arguments"] or "{}",
+                    },
+                }
+            )
+
+        chat_messages.append(
+            {
+                "role": "assistant",
+                "content": "".join(round_text_parts) or None,
+                "tool_calls": assistant_tool_calls_payload,
+            }
+        )
+
+        # 若前面尚未命中工具名触发垫场提示（例如工具名分片到达），在执行前补发一次
+        if not emitted_filler_for_turn:
+            first_spec = tool_registry.get(ordered_calls[0]["name"].strip())
+            emitted_filler_for_turn = True
+            yield {
+                "type": "tool_start",
+                "tool_name": ordered_calls[0]["name"].strip(),
+                "filler_hint": first_spec.filler_hint if first_spec else "好喔，我这就帮你处理一下～",
+            }
+
+        for call in ordered_calls:
+            tool_name = call["name"].strip()
+            result = await tool_registry.execute(tool_name, call["arguments"], tool_ctx)
+            ui_evt = result.to_ui_event()
+            tool_events.append(ui_evt)
+            archive_skip_keys.update(result.archive_skip_keys)
+            yield {
+                "type": "tool_result",
+                "tool_name": tool_name,
+                "ok": result.ok,
+                "badge": result.badge,
+                "error": result.error,
+                "data": result.data,
+            }
+            chat_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": json.dumps(result.to_llm_payload(), ensure_ascii=False),
+                }
+            )
+
+    yield {
+        "type": "turn_meta",
+        "tool_events": tool_events,
+        "archive_skip_keys": sorted(archive_skip_keys),
+        "tools_degraded": tools_degraded,
+    }
+
+
+async def stream_voice_call_reply(
+    user_message: str,
+    date_str: str | None = None,
+    mode: str = "normal",
+    thread_id: str | None = None,
+) -> AsyncIterator[str]:
+    """
+    主轨极速流式对话生成器（向后兼容接口）：
+    直接逐字产出纯台湾腔口语文本，内部复用支持 Tool Calling 的 `stream_agent_turn`。
+    """
+    async for evt in stream_agent_turn(
+        user_message=user_message,
+        date_str=date_str,
+        mode=mode,
+        thread_id=thread_id,
+        channel="voice",
+    ):
+        if evt.get("type") == "text_delta" and evt.get("delta"):
+            yield str(evt["delta"])
 
 
 def save_voice_call_messages(
@@ -724,18 +970,47 @@ async def archive_voice_call_turn_async(
     mode: str = "normal",
     thread_id: str | None = None,
     source_message_id: int | None = None,
+    skip_keys: set[str] | list[str] | None = None,
 ) -> dict[str, Any]:
     """
-    副轨后台静默归档（完全不阻塞语音通话延迟）：
-    在本轮通话结束后异步分析用户说的话，静默提取习惯打卡、心情/精力、小确幸与长期记忆并刷新 Markdown。
+    副轨后台静默归档（完全不阻塞语音通话延迟，支持工具优先智能退让）：
+    在本轮对话结束后异步分析用户说的话，静默提取习惯打卡、心情/精力、小确幸与长期记忆并刷新 Markdown。
+    若本轮实时 Tool Calling 已写入部分或全部维度（由 `skip_keys` 传入），自动跳过对应维度防止重复入库。
     """
+    skip_set = set(skip_keys or ())
+    ctx = _load_daily_context(date_str, thread_id)
+
+    empty_applied: dict[str, Any] = {
+        "summary_updated": False,
+        "habit_updates": [],
+        "mood_score": None,
+        "energy_score": None,
+        "new_highlights": [],
+        "new_memories": [],
+    }
+    fully_covered = (
+        {"summary", "highlights", "new_memories"}.issubset(skip_set)
+        and ("habit_updates" in skip_set or not ctx["pending_habits"])
+    )
+    if fully_covered:
+        pending_habits = [
+            {"id": h["id"], "title": h["title"], "category": h["category"]}
+            for h in ctx["pending_habits"]
+        ]
+        return {
+            "applied": empty_applied,
+            "tags": [],
+            "pending_habits": pending_habits,
+            "md_path": str(DATA_DIR / "notes" / "daily" / f"{date_str}.md"),
+            "skipped_by_tools": True,
+        }
+
     settings = _load_settings_dict()
     llm_cfg = settings.get("llm", {})
     api_key = (llm_cfg.get("api_key") or "").strip()
     base_url = (llm_cfg.get("base_url") or "https://generativelanguage.googleapis.com/v1beta/openai/").strip()
     model_name = (llm_cfg.get("model") or "gemini-2.5-flash").strip()
 
-    ctx = _load_daily_context(date_str, thread_id)
     extracted: dict[str, Any] = {}
 
     if not api_key:
@@ -747,8 +1022,13 @@ async def archive_voice_call_turn_async(
             for h in ctx["habits"]
         ]
         habits_block = "\n".join(habit_lines) if habit_lines else "（无预设习惯）"
+        skip_note = (
+            f"\n- 以下维度已在本轮通过工具实时记录，请保持空/null 绝不重复提取：{', '.join(sorted(skip_set))}。"
+            if skip_set
+            else ""
+        )
 
-        extractor_prompt = f"""你是后台静默记录助手。请根据刚刚这一轮实时语音对话，提取值得归档的结构化信息，严格输出合法 JSON（不要任何额外说明）。
+        extractor_prompt = f"""你是后台静默记录助手。请根据刚刚这一轮对话，提取值得归档的遗漏结构化信息，严格输出合法 JSON（不要任何额外说明）。
 
 今日预设习惯清单：
 {habits_block}
@@ -764,7 +1044,7 @@ async def archive_voice_call_turn_async(
 }}
 规则：
 - 仅当用户**明确提到**某项习惯状态时才写入 habit_updates，绝不猜测。
-- 普通寒暄若无实质可归档内容，各数组保持空 []、评分保持 null、摘要保持空字符串 ""。"""
+- 普通寒暄若无实质可归档内容，各数组保持空 []、评分保持 null、摘要保持空字符串 ""。{skip_note}"""
 
         client = _get_async_openai_client(api_key=api_key, base_url=base_url)
         base_kwargs: dict[str, Any] = {
@@ -799,15 +1079,44 @@ async def archive_voice_call_turn_async(
         except json.JSONDecodeError as exc:
             raise ValueError("归档响应格式无效") from exc
 
+    # 二次硬过滤：确保工具已写过的维度绝不被后台归档重复写入
+    if isinstance(extracted, dict) and skip_set:
+        if "summary" in skip_set:
+            extracted.pop("daily_summary_append", None)
+        if "mood_score" in skip_set:
+            extracted.pop("mood_score", None)
+        if "energy_score" in skip_set:
+            extracted.pop("energy_score", None)
+        if "highlights" in skip_set:
+            extracted.pop("new_highlights", None)
+        if "habit_updates" in skip_set:
+            extracted.pop("habit_updates", None)
+        if "new_memories" in skip_set:
+            extracted.pop("new_memories", None)
+
     archive_result = _apply_extracted_updates(date_str, extracted, source_message_id)
     applied = archive_result["applied"]
     tags: list[str] = []
+    mutated_domains: list[str] = []
     if applied.get("habit_updates"):
         tags.append(f"已静默记录 {len(applied['habit_updates'])} 项习惯")
+        mutated_domains.extend(["habits", "logs", "today"])
     if applied.get("new_highlights"):
         tags.append(f"收入 {len(applied['new_highlights'])} 条小确幸")
+        mutated_domains.extend(["logs", "today"])
     if applied.get("new_memories"):
         tags.append(f"记住 {len(applied['new_memories'])} 条长期记忆")
+        mutated_domains.append("memories")
+    if applied.get("summary_updated") or applied.get("mood_score") is not None or applied.get("energy_score") is not None:
+        mutated_domains.extend(["logs", "today"])
+
+    if mutated_domains:
+        try:
+            from app.services.event_bus import event_bus
+
+            await event_bus.notify_data_changed(mutated_domains, source="archive")
+        except Exception:
+            pass
 
     updated_habit_ids = {item["habit_id"] for item in applied.get("habit_updates") or []}
     pending_habits = [
@@ -820,6 +1129,7 @@ async def archive_voice_call_turn_async(
         "tags": tags,
         "pending_habits": pending_habits,
         "md_path": archive_result["md_path"],
+        "skipped_by_tools": False,
     }
 
 
@@ -863,9 +1173,9 @@ async def iter_text_chat_events(
     thread_id: str | None = None,
 ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     """
-    文字对话的首句抢跑。
-    口语回复沿用通话那条流式主轨，每凑成一句就先抛给前端去念。
-    习惯、心情和小确幸等整段说完再归档，不挡第一句出声。
+    文字对话的首句抢跑 + 实时 Tool Calling。
+    口语回复沿用统一流式主轨，每凑成一句就先抛给前端去念；工具执行结果实时推 `tool_action` 事件；
+    未由工具覆盖的习惯、心情和小确幸等整段说完再由后台归档补齐。
     """
     from app.core.logging import redact_secrets
 
@@ -876,6 +1186,8 @@ async def iter_text_chat_events(
     splitter = IncrementalSentenceSplitter()
     parts: list[str] = []
     sentences: list[str] = []
+    tool_actions: list[dict[str, Any]] = []
+    archive_skip_keys: set[str] = set()
     index = 0
 
     def take(ready: list[str]) -> list[tuple[str, dict[str, Any]]]:
@@ -888,10 +1200,31 @@ async def iter_text_chat_events(
         return events
 
     try:
-        async for delta in stream_voice_call_reply(user_message, today_str, mode, thread_id=thread_id):
-            parts.append(delta)
-            for event in take(splitter.feed(delta)):
-                yield event
+        async for evt in stream_agent_turn(
+            user_message=user_message,
+            date_str=today_str,
+            mode=mode,
+            thread_id=thread_id,
+            channel="text",
+        ):
+            evt_type = evt.get("type")
+            if evt_type == "text_delta":
+                delta = str(evt.get("delta") or "")
+                if delta:
+                    parts.append(delta)
+                    for event in take(splitter.feed(delta)):
+                        yield event
+            elif evt_type == "tool_result":
+                action_item = {
+                    "tool": str(evt.get("tool_name") or ""),
+                    "ok": bool(evt.get("ok")),
+                    "badge": evt.get("badge"),
+                    "error": evt.get("error"),
+                }
+                tool_actions.append(action_item)
+                yield ("tool_action", action_item)
+            elif evt_type == "turn_meta":
+                archive_skip_keys.update(evt.get("archive_skip_keys") or [])
         for event in take(splitter.flush()):
             yield event
     except Exception as exc:
@@ -921,6 +1254,7 @@ async def iter_text_chat_events(
         "emotion": emotion,
         "duration_ms": duration_ms,
         "used_offline_fallback": not bool(api_key),
+        "tool_actions": tool_actions,
     }
     yield ("reply", reply_payload)
 
@@ -933,7 +1267,15 @@ async def iter_text_chat_events(
     }
     archive_failed = False
     try:
-        archive = await archive_voice_call_turn_async(today_str, user_message, reply, mode, thread_id=thread_id, source_message_id=source_id)
+        archive = await archive_voice_call_turn_async(
+            today_str,
+            user_message,
+            reply,
+            mode,
+            thread_id=thread_id,
+            source_message_id=source_id,
+            skip_keys=archive_skip_keys,
+        )
     except Exception as exc:
         logger.warning("文字对话归档失败: %s", redact_secrets(str(exc))[:300])
         archive_failed = True
@@ -950,3 +1292,28 @@ async def iter_text_chat_events(
             "md_path": archive.get("md_path") or "",
         },
     )
+
+
+async def run_agent_chat_async(
+    user_message: str,
+    date_str: str | None = None,
+    mode: str = "normal",
+    trigger_type: str = "manual",
+    thread_id: str | None = None,
+) -> dict[str, Any]:
+    """非流式 `/api/chat` 的异步入口：复用与流式对话完全一致的 Tool Calling 引擎。"""
+    done_payload: dict[str, Any] | None = None
+    async for event, data in iter_text_chat_events(
+        user_message=user_message,
+        date_str=date_str,
+        mode=mode,
+        trigger_type=trigger_type,
+        thread_id=thread_id,
+    ):
+        if event == "error":
+            raise RuntimeError(str(data.get("detail") or "对话中断了"))
+        if event == "done":
+            done_payload = data
+    if done_payload is None:
+        raise RuntimeError("对话未正常完成")
+    return done_payload

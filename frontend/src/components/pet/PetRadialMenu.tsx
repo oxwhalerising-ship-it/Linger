@@ -23,10 +23,12 @@ import { PET_EMOTION_META, type PetEmotion } from "../../types/pet";
 export interface PetRadialMenuProps {
   open: boolean;
   callOpen: boolean;
+  focusSetupOpen?: boolean;
   dndEnabled: boolean;
   emotionPickerOpen: boolean;
   currentEmotion: PetEmotion;
   onToggleCall: () => void;
+  onToggleFocusSetup: () => void;
   onToggleEmotionPicker: () => void;
   onSelectEmotion: (emotion: PetEmotion) => void;
   onToggleDnd: () => void;
@@ -150,13 +152,58 @@ function PropStarExit() {
   );
 }
 
+function PropTomatoClock({ active }: { active?: boolean }) {
+  return (
+    <svg viewBox="0 0 28 28" className="w-[22px] h-[22px]">
+      <defs>
+        <radialGradient id="propTomatoG" cx="35%" cy="30%" r="70%">
+          <stop offset="0%" stopColor={active ? "#FDA4AF" : "#FF8A7A"} />
+          <stop offset="55%" stopColor="#F43F5E" />
+          <stop offset="100%" stopColor="#BE123C" />
+        </radialGradient>
+      </defs>
+      {/* 圆润番茄本体 */}
+      <ellipse
+        cx="14"
+        cy="16.2"
+        rx="8.8"
+        ry="7.6"
+        fill="url(#propTomatoG)"
+        stroke="#FFFFFF"
+        strokeWidth="1.2"
+      />
+      {/* 翠绿小番茄叶蒂 */}
+      <path
+        d="M14 9.5 C12 7.2 9.2 7.4 8.6 9.4 C10.6 9.4 12.2 10 14 10.6 C15.8 10 17.4 9.4 19.4 9.4 C18.8 7.4 16 7.2 14 9.5 Z"
+        fill="#22C55E"
+        stroke="#FFFFFF"
+        strokeWidth="0.7"
+        strokeLinejoin="round"
+      />
+      <path d="M14 9.2 L14 6.2" stroke="#16A34A" strokeWidth="1.8" strokeLinecap="round" />
+      {/* 内嵌迷你时钟表盘与指针 */}
+      <circle cx="14" cy="16.5" r="4.4" fill="rgba(255,255,255,0.92)" />
+      <path
+        d="M14 13.7 V16.5 L16 17.7"
+        fill="none"
+        stroke="#E11D48"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export default function PetRadialMenu({
   open,
   callOpen,
+  focusSetupOpen = false,
   dndEnabled,
   emotionPickerOpen,
   currentEmotion,
   onToggleCall,
+  onToggleFocusSetup,
   onToggleEmotionPicker,
   onSelectEmotion,
   onToggleDnd,
@@ -166,12 +213,12 @@ export default function PetRadialMenu({
 }: PetRadialMenuProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  // 5 枚水晶道具沿正圆轨道以 40° 等距对称环绕灵儿（双击灵儿即可打开主控面板）
+  // 6 枚水晶道具沿正圆轨道以 34° 等距对称环绕灵儿（含番茄时钟快捷入口）
   const items: OrbitItem[] = [
     {
       id: "dnd",
       label: dndEnabled ? "关闭免打扰" : "免打扰（关闭唤醒）",
-      angleDeg: -170,
+      angleDeg: -175,
       active: dndEnabled,
       onClick: onToggleDnd,
       icon: <PropMoonBell active={dndEnabled} />,
@@ -179,7 +226,7 @@ export default function PetRadialMenu({
     {
       id: "emotions",
       label: "灵儿表情",
-      angleDeg: -130,
+      angleDeg: -141,
       active: emotionPickerOpen,
       onClick: onToggleEmotionPicker,
       icon: <PropCrystalFlower />,
@@ -187,22 +234,30 @@ export default function PetRadialMenu({
     {
       id: "call",
       label: callOpen ? "挂断通话" : "打电话",
-      angleDeg: -90,
+      angleDeg: -107,
       active: callOpen,
       onClick: onToggleCall,
       icon: <PropCrystalPhone active={callOpen} />,
     },
     {
+      id: "pomodoro",
+      label: "番茄时钟",
+      angleDeg: -73,
+      active: focusSetupOpen,
+      onClick: onToggleFocusSetup,
+      icon: <PropTomatoClock active={focusSetupOpen} />,
+    },
+    {
       id: "hide",
       label: "隐藏至托盘",
-      angleDeg: -50,
+      angleDeg: -39,
       onClick: onHideToTray,
       icon: <PropCloudHide />,
     },
     {
       id: "quit",
       label: "退出",
-      angleDeg: -10,
+      angleDeg: -5,
       danger: true,
       onClick: onQuitApp,
       icon: <PropStarExit />,
@@ -219,15 +274,13 @@ export default function PetRadialMenu({
     >
       {/* 灵儿撒向天空时的淡蓝星辉正圆环绕光圈 */}
       <div
-        className="absolute rounded-full border border-sky-300/50 transition-all duration-500 ease-out"
+        className="absolute rounded-full border border-black/10 transition-all duration-300 ease-out"
         style={{
           width: orbitRadius * 2,
           height: orbitRadius * 2,
           opacity: open ? 0.88 : 0,
           transform: open ? "scale(1) rotate(0deg)" : "scale(0.35) rotate(-32deg)",
-          boxShadow: open
-            ? "0 0 24px rgba(96, 165, 250, 0.24) inset, 0 0 18px rgba(56, 189, 248, 0.16)"
-            : "none",
+          boxShadow: "none",
         }}
       />
 
@@ -247,10 +300,10 @@ export default function PetRadialMenu({
               left: "50%",
               top: "50%",
               transform: open
-                ? `translate3d(${tx.toFixed(1)}px, ${ty.toFixed(1)}px, 0) translate(-50%, -50%) scale(${isHovered ? 1.14 : 1})`
+                ? `translate3d(${tx.toFixed(1)}px, ${ty.toFixed(1)}px, 0) translate(-50%, -50%) scale(${isHovered ? 1.06 : 1})`
                 : "translate3d(0px, 14px, 0) translate(-50%, -50%) scale(0.22) rotate(-25deg)",
               opacity: open ? 1 : 0,
-              transition: `transform 420ms cubic-bezier(0.34, 1.48, 0.64, 1) ${delayMs}ms, opacity 240ms ease-out ${delayMs}ms`,
+              transition: `transform 380ms cubic-bezier(0.22, 1, 0.36, 1) ${delayMs}ms, opacity 220ms ease-out ${delayMs}ms`,
               pointerEvents: open ? "auto" : "none",
               zIndex: isHovered ? 40 : 20,
             }}
@@ -274,12 +327,12 @@ export default function PetRadialMenu({
                 item.onClick();
               }}
               aria-label={item.label}
-              className={`relative w-10 h-10 rounded-full flex items-center justify-center cursor-pointer border backdrop-blur-md transition-shadow duration-200 ${
+              className={`apple-btn relative w-10 h-10 rounded-full flex items-center justify-center cursor-pointer ${
                 item.active
-                  ? "bg-sky-500/90 border-white shadow-[0_6px_18px_rgba(59,130,246,0.48)]"
+                  ? "apple-btn-fill"
                   : item.danger
-                    ? "bg-white/92 hover:bg-rose-50 border-rose-200/90 shadow-[0_6px_16px_rgba(244,63,94,0.2)]"
-                    : "bg-white/92 hover:bg-sky-50 border-sky-200/90 shadow-[0_6px_16px_rgba(59,130,246,0.24)]"
+                    ? "apple-sheet text-[#ff3b30]"
+                    : "apple-sheet"
               }`}
             >
               {item.icon}
@@ -287,7 +340,7 @@ export default function PetRadialMenu({
 
             {/* 悬浮清晰文字提示胶囊（智能避让灵儿头部不遮挡） */}
             <div
-              className="pointer-events-none absolute left-1/2 -translate-x-1/2 whitespace-nowrap px-2 py-0.5 rounded-full text-[10.5px] font-semibold tracking-wide bg-slate-900/88 text-sky-50 shadow-md transition-all duration-150"
+              className="pointer-events-none absolute left-1/2 -translate-x-1/2 whitespace-nowrap px-2 py-0.5 rounded-full text-[11px] font-medium tracking-[-0.01em] bg-[rgba(28,28,30,0.88)] text-[#f5f5f7] shadow-md transition-opacity duration-150"
               style={{
                 top: ty < -40 ? "-24px" : "44px",
                 opacity: isHovered && open ? 1 : 0,
@@ -303,7 +356,7 @@ export default function PetRadialMenu({
       {/* 点击「灵儿表情」道具后在底部展开的紧凑水晶表情快选条 */}
       {open && emotionPickerOpen && (
         <div
-          className="pointer-events-auto absolute bottom-1 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1 px-2 py-1.5 rounded-full bg-white/94 backdrop-blur-md border border-sky-200/90 shadow-[0_8px_24px_rgba(37,99,235,0.22)] animate-bubble-pop"
+          className="apple-sheet pointer-events-auto absolute bottom-1 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1 px-2 py-1.5 rounded-full animate-bubble-pop"
           onPointerEnter={() => onHoverChange?.(true)}
           onClick={(e) => e.stopPropagation()}
         >
@@ -321,10 +374,8 @@ export default function PetRadialMenu({
                   playPetSound("notch", { muted: dndEnabled });
                   onSelectEmotion(item.id);
                 }}
-                className={`px-2 py-0.5 rounded-full text-[10.5px] font-medium whitespace-nowrap cursor-pointer transition-colors ${
-                  active
-                    ? "bg-sky-500 text-white shadow-sm"
-                    : "text-slate-600 hover:bg-sky-100 hover:text-sky-700"
+                className={`apple-btn px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap cursor-pointer ${
+                  active ? "apple-btn-fill" : "apple-btn-plain"
                 }`}
               >
                 {item.short}

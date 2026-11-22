@@ -12,6 +12,7 @@ import {
   type DailyLogDetail,
   type MonthlyHeatmapDay,
 } from "../../services/api";
+import { isNetworkFetchError } from "../../services/api/client";
 import {
   IconCheck,
   IconChevronLeft,
@@ -71,7 +72,7 @@ export default function JournalView({initialDate}: {initialDate?:string}) {
       }
       if(monthRef.current===monthStr)setMonthMap(map);
     } catch (e) {
-      setError(String(e));
+      if (!isNetworkFetchError(e)) setError(String(e));
     }
   }, [monthStr]);
 
@@ -80,13 +81,26 @@ export default function JournalView({initialDate}: {initialDate?:string}) {
       const res = await api.getDailyLog(dateStr);
       if(selectedRef.current===dateStr)setDetail(res);
     } catch(e) {
-      if(selectedRef.current===dateStr){setDetail(null);setError(String(e))}
+      if(selectedRef.current===dateStr){
+        setDetail(null);
+        if (!isNetworkFetchError(e)) setError(String(e));
+      }
     }
   }, []);
 
   useEffect(() => {
     void loadMonth();
-  }, [loadMonth]);
+    const onReady = () => {
+      void loadMonth();
+      void loadDayDetail(selectedRef.current);
+    };
+    window.addEventListener("linger-backend-ready", onReady);
+    window.addEventListener("linger-data-changed", onReady);
+    return () => {
+      window.removeEventListener("linger-backend-ready", onReady);
+      window.removeEventListener("linger-data-changed", onReady);
+    };
+  }, [loadMonth, loadDayDetail]);
 
   useEffect(() => {
     setSummaryDraft(null);setDetail(null);setError("");

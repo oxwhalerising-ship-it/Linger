@@ -27,7 +27,11 @@ from app.schemas import (
     MessageCreate,
     MessageUpdate,
 )
-from app.services.agent_brain import archive_voice_call_turn_async, iter_text_chat_events, run_agent_chat
+from app.services.agent_brain import (
+    archive_voice_call_turn_async,
+    iter_text_chat_events,
+    run_agent_chat_async,
+)
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
@@ -50,11 +54,11 @@ def _row_to_message_dict(row) -> dict:
 
 
 @router.post("")
-def chat_with_bot(payload: ChatRequest):
-    """与台湾腔小管家对话，并自动触发静默归档与 Markdown 更新"""
+async def chat_with_bot(payload: ChatRequest):
+    """与台湾腔小管家对话（支持统一 Tool Calling、静默归档与 Markdown 更新）"""
     validated_date = _validate_date_str(payload.date) if payload.date else None
     try:
-        return run_agent_chat(
+        return await run_agent_chat_async(
             user_message=payload.message,
             date_str=validated_date,
             mode=payload.mode,

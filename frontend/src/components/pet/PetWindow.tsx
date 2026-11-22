@@ -20,10 +20,26 @@ import PetCallBar, {
   type PetCallSubtitle,
   type PetCallVisualState,
 } from "./PetCallBar";
+import PetFocusReminderCard, {
+  type FocusReminderView,
+} from "./PetFocusReminderCard";
+import PetFocusSetupCard, {
+  type FocusSetupResult,
+} from "./PetFocusSetupCard";
+import PetFocusWidget from "./PetFocusWidget";
 import PetRadialMenu from "./PetRadialMenu";
 import QuickVoiceBar from "./QuickVoiceBar";
 import { api } from "../../services/api";
 import { openAuthedWebSocket } from "../../services/api/client";
+import {
+  executeFocusCommand,
+  formatClock,
+  onFocusLifecycle,
+  skipBreak,
+  startNextPomodoroRound,
+  useFocusClock,
+  type FocusLifecycleEvent,
+} from "../../services/focusClock";
 import {
   createSentencePlayer,
   playTaiwanSentences,
@@ -39,6 +55,17 @@ import {
   type PetDockPose,
   type PetEmotion,
 } from "../../types/pet";
+
+type PetFocusStage =
+  | "idle"
+  | "waiting-call"
+  | "picking-up"
+  | "flying-to-corner"
+  | "focus-widget"
+  | "break-alert"
+  | "break-widget"
+  | "next-round-prompt"
+  | "flying-back";
 
 const DEFAULT_AVATAR_CONFIG: AvatarConfig = {
   provider: "builtin-sprite",
@@ -81,6 +108,20 @@ export default function PetWindow() {
   });
   // 追踪实际窗口视口尺寸，防止任何情况下（如高 DPI / 旧窗口未重启）灵儿与环绕按钮被裁切
   const [brainNote, setBrainNote] = useState<string | null>(null);
+  const [actionBadge, setActionBadge] = useState<string | null>(null);
+  const actionBadgeTimerRef = useRef<number | null>(null);
+  // 番茄钟三步配置面板 & 抱番茄升空坐地全周期状态机
+  const focusClock = useFocusClock();
+  const [focusSetupOpen, setFocusSetupOpen] = useState(false);
+  const [justLandedFocus, setJustLandedFocus] = useState(false);
+  const [focusStage, setFocusStage] = useState<PetFocusStage>("idle");
+  const focusStageRef = useRef<PetFocusStage>("idle");
+  const [flightPose, setFlightPose] = useState<"none" | "fly-right" | "fly-left">("none");
+  const [focusReminder, setFocusReminder] = useState<FocusReminderView | null>(null);
+  const focusFlowSeqRef = useRef(0);
+  const breakCollapseTimerRef = useRef<number | null>(null);
+  const waitCallSeenSpeakingRef = useRef(false);
+  const prevFocusPhaseRef = useRef(focusClock.phase);
   const [viewport, setViewport] = useState(() => ({
     width: typeof window !== "undefined" ? window.innerWidth : 380,
     height: typeof window !== "undefined" ? window.innerHeight : 360,
@@ -203,12 +244,21 @@ export default function PetWindow() {
     callOpenRef.current = callOpen;
   }, [callOpen]);
 
-  // 开启 html.pet-mode 透明根样式，预加载交互音效，并清空窗口文档标题防止系统标题栏显示文字
+  // 开启 html.pet-mode 透明根样式，预加载交互音效，首帧透明绘制完成后再通知主进程显现窗口
   useEffect(() => {
     document.title = "";
     document.documentElement.classList.add("pet-mode");
     preloadPetSounds();
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        window.taiwanBotEnv?.notifyPetReady?.();
+      });
+    });
     return () => {
+      window.cancelAnimationFrame(raf1);
+      window.cancelAnimationFrame(raf2);
       document.documentElement.classList.remove("pet-mode");
     };
   }, []);
@@ -223,15 +273,31 @@ export default function PetWindow() {
     return () => window.removeEventListener("resize", updateViewport);
   }, []);
 
-  // 根据快捷输入框 / 实时语音通话状态同步桌宠窗口尺寸模式
+  // 根据番茄钟状态 / 快捷输入框 / 实时语音通话状态同步桌宠窗口尺寸模式
   useEffect(() => {
-    const mode = callOpen ? "call" : quickChatOpen ? "quick-chat" : "compact";
+    focusStageRef.current = focusStage;
+    let mode: "compact" | "quick-chat" | "call" | "focus-setup" | "focus" | "focus-alert";
+    if (focusStage === "focus-widget" || focusStage === "break-widget") {
+      mode = "focus";
+    } else if (focusStage === "break-alert" || focusStage === "next-round-prompt") {
+      mode = "focus-alert";
+    } else if (
+      focusStage === "picking-up" ||
+      focusStage === "flying-to-corner" ||
+      focusStage === "flying-back"
+    ) {
+      mode = "compact";
+    } else if (focusSetupOpen) {
+      mode = "focus-setup";
+    } else {
+      mode = callOpen ? "call" : quickChatOpen ? "quick-chat" : "compact";
+    }
     if (window.taiwanBotEnv?.setPetMode) {
       window.taiwanBotEnv.setPetMode(mode);
     } else {
       window.taiwanBotEnv?.setPetExpanded(mode !== "compact");
     }
-  }, [callOpen, quickChatOpen]);
+  }, [callOpen, quickChatOpen, focusSetupOpen, focusStage]);
 
   /** 切换表情并可选在一段时间后回到待机态 */
   const triggerEmotion = useCallback(
@@ -279,6 +345,326 @@ export default function PetWindow() {
     triggerEmotion("idle", 0);
     window.taiwanBotEnv?.notifyVoiceCallOwner?.("none");
   }, [triggerEmotion]);
+
+  /** 清理休息自动收起定时器 */
+  const clearBreakCollapseTimer = useCallback(() => {
+    if (breakCollapseTimerRef.current !== null) {
+      window.clearTimeout(breakCollapseTimerRef.current);
+      breakCollapseTimerRef.current = null;
+    }
+  }, []);
+
+  /** 打开/关闭桌宠番茄时钟三步配置卡（先时长 -> 再任务 -> 确认起飞） */
+  const toggleFocusSetup = useCallback(() => {
+    setFocusSetupOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        audioAbortRef.current?.abort();
+        setQuickChatOpen(false);
+        setRadialMenuOpen(false);
+        setEmotionPickerOpen(false);
+        triggerEmotion("expectant", 0);
+      } else {
+        triggerEmotion("idle", 0);
+      }
+      return next;
+    });
+  }, [triggerEmotion]);
+
+  /** 抱起立体番茄时钟 -> 微蹲蓄力 -> 缓慢浮力升空至主屏右上角 -> 落地坐下陪伴 */
+  const runFlyToFocus = useCallback(async () => {
+    const seq = ++focusFlowSeqRef.current;
+    clearBreakCollapseTimer();
+    setFocusSetupOpen(false);
+    setQuickChatOpen(false);
+    setRadialMenuOpen(false);
+    setEmotionPickerOpen(false);
+    setFocusReminder(null);
+
+    // 阶段 1：怀里“啵”地抱起立体番茄钟，微蹲蓄力
+    focusStageRef.current = "picking-up";
+    setFocusStage("picking-up");
+    triggerEmotion("excited", 0);
+    playPetSound("huddle", { muted: dndRef.current });
+    await new Promise((r) => window.setTimeout(r, 440));
+    if (focusFlowSeqRef.current !== seq) return;
+
+    // 阶段 2：抱着番茄钟缓慢浮力升空至主屏幕最右上角
+    setFocusStage("flying-to-corner");
+    playPetSound("dispatch", { muted: dndRef.current });
+
+    if (window.taiwanBotEnv?.flyPetToFocus) {
+      await window.taiwanBotEnv.flyPetToFocus();
+    } else {
+      setFlightPose("fly-right");
+      await new Promise((r) => window.setTimeout(r, 1250));
+      setFlightPose("none");
+    }
+    if (focusFlowSeqRef.current !== seq) return;
+
+    // 阶段 3：抵达主屏右上角，柔和缓冲落地坐下抱着番茄等待倒计时
+    setJustLandedFocus(true);
+    setFocusStage("focus-widget");
+  }, [clearBreakCollapseTimer, triggerEmotion]);
+
+  /** 三步配置卡点击「确认开始」：启动计时器并立刻触发抱起番茄升空动画 */
+  const handleConfirmFocusSetup = useCallback(
+    (setup: FocusSetupResult) => {
+      setFocusSetupOpen(false);
+      executeFocusCommand({
+        action: "start",
+        mode: setup.mode,
+        minutes: setup.minutes,
+        task_id: setup.taskId,
+        task_title: setup.taskTitle,
+        finish_task: setup.finishTask,
+        force: true,
+      });
+      void runFlyToFocus();
+    },
+    [runFlyToFocus],
+  );
+
+  /** 已在主屏右上角时，原地抱起番茄进入下一轮坐姿专注 */
+  const morphIntoFocusWidget = useCallback(async () => {
+    const seq = ++focusFlowSeqRef.current;
+    clearBreakCollapseTimer();
+    audioAbortRef.current?.abort();
+    setFocusReminder(null);
+    setFocusStage("picking-up");
+    triggerEmotion("excited", 0);
+    playPetSound("huddle", { muted: dndRef.current });
+    await new Promise((r) => window.setTimeout(r, 380));
+    if (focusFlowSeqRef.current !== seq) return;
+    setJustLandedFocus(true);
+    setFocusStage("focus-widget");
+  }, [clearBreakCollapseTimer, triggerEmotion]);
+
+  /** 全部结束后，以飞行姿态平滑飞回起飞前的原始桌面位置 */
+  const runFlyBackOrigin = useCallback(async () => {
+    const seq = ++focusFlowSeqRef.current;
+    clearBreakCollapseTimer();
+    audioAbortRef.current?.abort();
+    setFocusReminder(null);
+    focusStageRef.current = "flying-back";
+    setFocusStage("flying-back");
+    triggerEmotion("happy", 0);
+    playPetSound("dispatch", { muted: dndRef.current });
+
+    if (window.taiwanBotEnv?.flyPetBackOrigin) {
+      await window.taiwanBotEnv.flyPetBackOrigin();
+    } else {
+      setFlightPose("fly-left");
+      await new Promise((r) => window.setTimeout(r, 640));
+      setFlightPose("none");
+    }
+    if (focusFlowSeqRef.current !== seq) return;
+
+    setFlightPose("none");
+    setFocusStage("idle");
+    triggerEmotion("idle", 0);
+  }, [clearBreakCollapseTimer, triggerEmotion]);
+
+  /** 监听主进程推送的飞行方向事件，实时驱动灵儿前倾/摆腿/星辉风纹姿态 */
+  useEffect(() => {
+    const off = window.taiwanBotEnv?.onPetFlightState?.((payload) => {
+      if (payload?.active && payload.direction && payload.direction !== "none") {
+        setFlightPose(payload.direction);
+      } else {
+        setFlightPose("none");
+      }
+    });
+    return () => {
+      off?.();
+      clearBreakCollapseTimer();
+    };
+  }, [clearBreakCollapseTimer]);
+
+  /** 监听番茄钟启动与外部提前结束：统一触发飞行变身或平滑飞回原位 */
+  useEffect(() => {
+    const prevPhase = prevFocusPhaseRef.current;
+    prevFocusPhaseRef.current = focusClock.phase;
+
+    if (focusClock.phase === "focus" && focusClock.running) {
+      if (focusStageRef.current === "idle") {
+        if (callOpenRef.current) {
+          // Q7：正在语音通话中开启番茄钟时，等本轮确认语音说完后再自动收起通话起飞
+          waitCallSeenSpeakingRef.current = callVisual.state === "speaking";
+          setFocusStage("waiting-call");
+        } else {
+          void runFlyToFocus();
+        }
+      } else if (
+        focusStageRef.current === "break-alert" ||
+        focusStageRef.current === "next-round-prompt"
+      ) {
+        void morphIntoFocusWidget();
+      } else if (focusStageRef.current === "break-widget") {
+        setFocusStage("focus-widget");
+      }
+      return;
+    }
+
+    // 面板外部主动停止计时（非自然休息完成）时，自动飞回原位
+    if (
+      prevPhase !== "idle" &&
+      focusClock.phase === "idle" &&
+      (focusStageRef.current === "focus-widget" ||
+        focusStageRef.current === "break-widget" ||
+        focusStageRef.current === "break-alert" ||
+        focusStageRef.current === "picking-up" ||
+        focusStageRef.current === "flying-to-corner")
+    ) {
+      void runFlyBackOrigin();
+    }
+  }, [
+    focusClock.phase,
+    focusClock.running,
+    callVisual.state,
+    runFlyToFocus,
+    morphIntoFocusWidget,
+    runFlyBackOrigin,
+  ]);
+
+  /** Q7：等待桌宠语音通话中灵儿把确认语说完后，平滑收起通话卡并起飞变身 */
+  useEffect(() => {
+    if (focusStage !== "waiting-call") return;
+    if (focusClock.phase !== "focus") {
+      setFocusStage("idle");
+      return;
+    }
+    if (!callOpen) {
+      void runFlyToFocus();
+      return;
+    }
+    if (callVisual.state === "speaking") {
+      waitCallSeenSpeakingRef.current = true;
+      return;
+    }
+    if (waitCallSeenSpeakingRef.current && callVisual.state === "listening") {
+      const timer = window.setTimeout(() => {
+        if (focusStageRef.current !== "waiting-call") return;
+        setCallOpen(false);
+        setCallVisual({
+          state: "ended",
+          micVolume: 0,
+          botVolume: 0,
+          muted: false,
+        });
+        window.taiwanBotEnv?.notifyVoiceCallOwner?.("none");
+        void runFlyToFocus();
+      }, 420);
+      return () => window.clearTimeout(timer);
+    }
+    // 兜底：若 9 秒内未进入说话态，也平滑起飞防止卡住
+    const fallback = window.setTimeout(() => {
+      if (focusStageRef.current !== "waiting-call") return;
+      setCallOpen(false);
+      window.taiwanBotEnv?.notifyVoiceCallOwner?.("none");
+      void runFlyToFocus();
+    }, 9000);
+    return () => window.clearTimeout(fallback);
+  }, [focusStage, focusClock.phase, callOpen, callVisual.state, runFlyToFocus]);
+
+  /** 监听番茄钟自然完成 & 休息完毕事件：在右上角还原灵儿 + 请求随机智能回复 + 台湾腔语音播报 */
+  useEffect(() => {
+    const handleLifecycle = async (evt: FocusLifecycleEvent) => {
+      const seq = ++focusFlowSeqRef.current;
+      clearBreakCollapseTimer();
+      audioAbortRef.current?.abort();
+
+      const kind =
+        evt.type === "focus_completed" ? "break-alert" : "next-round-prompt";
+      setFocusStage(kind);
+      triggerEmotion(evt.type === "focus_completed" ? "happy" : "expectant", 0);
+      playPetSound("huddle", { muted: dndRef.current });
+
+      setFocusReminder({
+        kind,
+        reply: "",
+        suggestionTag: evt.type === "focus_completed" ? "休息提醒" : "续轮提醒",
+        taskTitle: evt.taskTitle,
+        focusMinutes: evt.focusMinutes,
+        round: evt.round,
+        loading: true,
+      });
+
+      let replyText =
+        evt.type === "focus_completed"
+          ? "耶～这一轮专注完成啦！先停下来喝口水、站起来伸个懒腰放松一下喔～"
+          : "欸～休息完毕啰！精神充好电了吗，要不要跟我再来一轮番茄钟呀？";
+      let sentences = [replyText];
+      let suggestionTag = evt.type === "focus_completed" ? "喝口水" : "再来一轮";
+      let targetEmotion: PetEmotion =
+        evt.type === "focus_completed" ? "happy" : "expectant";
+
+      try {
+        const res = await api.focusCompanionMessage({
+          event: evt.type,
+          task_title: evt.taskTitle,
+          focus_minutes: evt.focusMinutes,
+          round: evt.round,
+          break_type: evt.breakType,
+          mode: evt.mode,
+        });
+        if (focusFlowSeqRef.current !== seq) return;
+        if (res.reply) {
+          replyText = res.reply;
+          sentences = res.sentences?.length ? res.sentences : [res.reply];
+        }
+        if (res.suggestion_tag) suggestionTag = res.suggestion_tag;
+        if (res.emotion) targetEmotion = res.emotion as PetEmotion;
+      } catch {
+        // 离线或接口异常时保留上面的温柔本地兜底句
+      }
+
+      if (focusFlowSeqRef.current !== seq) return;
+
+      setFocusReminder({
+        kind,
+        reply: replyText,
+        suggestionTag,
+        taskTitle: evt.taskTitle,
+        focusMinutes: evt.focusMinutes,
+        round: evt.round,
+        loading: false,
+      });
+
+      const scheduleAutoCollapseToBreak = () => {
+        if (kind !== "break-alert") return;
+        clearBreakCollapseTimer();
+        breakCollapseTimerRef.current = window.setTimeout(() => {
+          if (focusStageRef.current === "break-alert") {
+            setFocusReminder(null);
+            setFocusStage("break-widget");
+          }
+        }, 12_000);
+      };
+
+      if (!dndRef.current && sentences.length > 0) {
+        const controller = new AbortController();
+        audioAbortRef.current = controller;
+        void playTaiwanSentences(sentences, {
+          muted: dndRef.current,
+          signal: controller.signal,
+          onStartSpeaking: () => triggerEmotion("speaking", 0),
+          onFinishSpeaking: () => {
+            if (focusFlowSeqRef.current === seq) {
+              triggerEmotion(targetEmotion, 0);
+              scheduleAutoCollapseToBreak();
+            }
+          },
+        });
+      } else {
+        triggerEmotion(targetEmotion, 0);
+        scheduleAutoCollapseToBreak();
+      }
+    };
+
+    return onFocusLifecycle((evt) => {
+      void handleLifecycle(evt);
+    });
+  }, [clearBreakCollapseTimer, triggerEmotion]);
 
   /** 安全结束拖拽并复位状态 */
   const finishDrag = useCallback((target?: HTMLElement | null) => {
@@ -458,6 +844,7 @@ export default function PetWindow() {
 
   useEffect(() => {
     let stopped = false;
+    const bootStartedAt = Date.now();
     const tick = async () => {
       try {
         await api.getHealth();
@@ -468,14 +855,22 @@ export default function PetWindow() {
         else if (models.missing.length > 0) setBrainNote("本地语音模型还没准备好");
         else setBrainNote(null);
       } catch {
-        if (!stopped) setBrainNote("大脑还没连上");
+        // 刚启动前 10 秒后端正在拉起，不闪烁“大脑还没连上”提示
+        if (!stopped && Date.now() - bootStartedAt > 10_000) {
+          setBrainNote("大脑还没连上");
+        }
       }
     };
     void tick();
     const timer = window.setInterval(() => void tick(), 4000);
     const off = window.taiwanBotEnv?.onBackendStatus?.((status) => {
-      if (status.state === "ready") return;
-      setBrainNote(status.detail);
+      if (status.state === "ready") {
+        void tick();
+        return;
+      }
+      if (status.state === "down") {
+        setBrainNote(status.detail);
+      }
     });
     return () => {
       stopped = true;
@@ -727,6 +1122,18 @@ export default function PetWindow() {
       const res = await sendQuickChat(text, "normal", "manual", {
         signal: controller.signal,
         onSentence: (sentence) => player?.push(sentence),
+        onToolAction: (action) => {
+          const badge = action.badge?.trim();
+          if (badge) {
+            setActionBadge(badge);
+            if (actionBadgeTimerRef.current !== null) {
+              window.clearTimeout(actionBadgeTimerRef.current);
+            }
+            actionBadgeTimerRef.current = window.setTimeout(() => {
+              setActionBadge(null);
+            }, 4200);
+          }
+        },
         onReply: (reply) => {
           emotion = reply.emotion || "happy";
           setSending(false);
@@ -802,9 +1209,74 @@ export default function PetWindow() {
     };
   })();
 
+  const isMiniFocusMode =
+    focusStage === "focus-widget" || focusStage === "break-widget";
+  const isFocusAlertMode =
+    focusStage === "break-alert" || focusStage === "next-round-prompt";
+  const isFlyingOrMorphing =
+    focusStage === "picking-up" ||
+    focusStage === "flying-to-corner" ||
+    focusStage === "flying-back";
+
+  const activeTomatoProp =
+    focusStage === "picking-up" || focusStage === "flying-to-corner"
+      ? {
+          stage: (focusStage === "picking-up" ? "pickup" : "ascending") as
+            | "pickup"
+            | "ascending",
+          timeText: formatClock(focusClock.remaining),
+          progress:
+            focusClock.mode === "stopwatch"
+              ? 1
+              : focusClock.planned > 0
+                ? Math.max(0, Math.min(1, focusClock.remaining / focusClock.planned))
+                : 1,
+          running: focusClock.running,
+          onBreak: focusClock.phase === "short" || focusClock.phase === "long",
+          isStopwatch: focusClock.mode === "stopwatch",
+          direction: flightPose,
+        }
+      : null;
+
+  // 主屏右上角坐地抱番茄陪伴态（246×284 紧凑透明置顶窗）
+  if (isMiniFocusMode) {
+    return (
+      <div className="relative w-screen h-screen flex items-center justify-center bg-transparent overflow-hidden select-none">
+        <PetFocusWidget
+          clock={focusClock}
+          avatarConfig={DEFAULT_AVATAR_CONFIG}
+          dndEnabled={dndEnabled}
+          justLanded={justLandedFocus}
+          onStopAndReturn={() => {
+            setJustLandedFocus(false);
+            void runFlyBackOrigin();
+          }}
+          onSkipBreak={() => {
+            setJustLandedFocus(false);
+            void runFlyBackOrigin();
+          }}
+          onOpenPanel={() => {
+            window.taiwanBotEnv?.openDashboard?.({
+              page: "plan",
+              planSection: "focus",
+            });
+          }}
+        />
+      </div>
+    );
+  }
+
   // 根据当前模式所需舞台尺寸计算零裁切缩放比例（正常 380×360+ 窗口下恒为 1，绝不影响清晰度）
   const requiredStageWidth = callOpen ? 320 : 356;
-  const requiredStageHeight = callOpen ? 440 : quickChatOpen ? 408 : 336;
+  const requiredStageHeight = callOpen
+    ? 440
+    : focusSetupOpen
+      ? 492
+      : isFocusAlertMode
+        ? 408
+        : quickChatOpen
+          ? 408
+          : 336;
   const fitScale = Math.min(
     1,
     Math.max(
@@ -823,9 +1295,9 @@ export default function PetWindow() {
       onPointerLeave={handleStagePointerLeave}
       className="relative w-screen h-screen flex flex-col items-center justify-center bg-transparent overflow-hidden select-none"
     >
-      {brainNote && (
-        <div className="absolute top-2 left-1/2 z-20 -translate-x-1/2 max-w-[240px] truncate rounded-full bg-white/92 px-2.5 py-1 text-[11px] text-slate-700 shadow pointer-events-none">
-          {brainNote}
+      {(brainNote || actionBadge) && !isFocusAlertMode && !isFlyingOrMorphing && (
+        <div className="absolute top-2 left-1/2 z-20 -translate-x-1/2 max-w-[260px] truncate rounded-full bg-white/92 px-2.5 py-1 text-[11px] font-medium text-slate-700 shadow pointer-events-none">
+          {brainNote || actionBadge}
         </div>
       )}
       <div
@@ -839,10 +1311,37 @@ export default function PetWindow() {
             : undefined
         }
       >
+      {/* === 番茄完成 / 休息完毕智能互动气泡卡（悬浮在右上角灵儿头顶） === */}
+      {isFocusAlertMode && focusReminder && (
+        <PetFocusReminderCard
+          reminder={focusReminder}
+          breakRemaining={focusClock.remaining}
+          onAcceptBreak={() => {
+            clearBreakCollapseTimer();
+            audioAbortRef.current?.abort();
+            setFocusReminder(null);
+            setFocusStage("break-widget");
+          }}
+          onSkipBreak={() => {
+            clearBreakCollapseTimer();
+            skipBreak();
+            void runFlyBackOrigin();
+          }}
+          onStartNextRound={() => {
+            clearBreakCollapseTimer();
+            startNextPomodoroRound();
+            void morphIntoFocusWidget();
+          }}
+          onFinishAll={() => {
+            void runFlyBackOrigin();
+          }}
+        />
+      )}
+
       {/* === 实时通话模式：灵儿头顶浮动的实时双人对话字幕气泡（零遮挡、磨砂水晶质感） === */}
-      {callOpen && (
+      {callOpen && !isFocusAlertMode && (
         <div className="w-[302px] min-h-[62px] flex items-end justify-center px-1 pt-0.5">
-          <div className="relative w-full rounded-2xl px-3.5 py-2 bg-white/92 backdrop-blur-md border border-sky-200/90 shadow-[0_8px_22px_rgba(37,99,235,0.18)] animate-bubble-pop">
+          <div className="apple-sheet relative w-full rounded-[20px] px-3.5 py-2 animate-bubble-pop">
             <div className="flex items-start gap-2">
               <span
                 className={`shrink-0 mt-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
@@ -859,31 +1358,35 @@ export default function PetWindow() {
                     ? "灵儿"
                     : "通话"}
               </span>
-              <p className="text-[12px] leading-[1.45] font-medium text-slate-800 line-clamp-2 break-words">
+              <p className="text-[13px] leading-[1.4] font-medium tracking-[-0.014em] text-[#1d1d1f] line-clamp-2 break-words">
                 {callSubtitle.text}
               </p>
             </div>
             {/* 气泡小尖角，优雅指向灵儿头顶 */}
-            <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 rotate-45 bg-white/92 border-r border-b border-sky-200/90" />
+            <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 rotate-45 bg-white/90" />
           </div>
         </div>
       )}
 
-      {/* === 灵儿与 7 枚水晶道具环绕舞台（344×324 充裕舞台，确保身体/云朵枕头/环绕按钮 100% 完整无裁切） === */}
+      {/* === 灵儿与 6 枚水晶道具环绕舞台 === */}
       <div
         className={`relative flex items-center justify-center shrink-0 overflow-visible ${
-          callOpen ? "w-[260px] h-[184px]" : "w-[344px] h-[320px]"
+          callOpen || isFocusAlertMode || focusSetupOpen
+            ? "w-[260px] h-[184px]"
+            : "w-[344px] h-[320px]"
         }`}
       >
-        {/* 鼠标悬浮灵儿时：双手张开撒向天空，5 枚水晶道具按钮沿正圆环绕四周 */}
-        {!callOpen && (
+        {/* 鼠标悬浮灵儿时：双手张开撒向天空，6 枚水晶道具按钮沿正圆环绕四周 */}
+        {!callOpen && !focusSetupOpen && !isFocusAlertMode && !isFlyingOrMorphing && (
           <PetRadialMenu
             open={radialMenuOpen && !isDragging && !isPeeking}
             callOpen={callOpen}
+            focusSetupOpen={focusSetupOpen}
             dndEnabled={dndEnabled}
             emotionPickerOpen={emotionPickerOpen}
             currentEmotion={emotion}
             onToggleCall={startPetCall}
+            onToggleFocusSetup={toggleFocusSetup}
             onToggleEmotionPicker={() => {
               setEmotionPickerOpen((prev) => !prev);
             }}
@@ -1005,17 +1508,32 @@ export default function PetWindow() {
           <AvatarRenderer
             emotion={emotion}
             config={DEFAULT_AVATAR_CONFIG}
-            size={154}
-            dndEnabled={dndEnabled && !callOpen}
+            size={isFlyingOrMorphing ? 176 : 154}
+            dndEnabled={dndEnabled && !callOpen && !isFocusAlertMode && !isFlyingOrMorphing}
             isPatting={isPatting}
             patMood={patMood}
             isDragging={isDragging}
             isCastingMenu={isCastingMenu}
-            dockPose={dockPose}
-            lookTarget={lookTarget}
+            flightPose={flightPose}
+            tomatoClock={activeTomatoProp}
+            dockPose={isFlyingOrMorphing || isFocusAlertMode || focusSetupOpen ? "none" : dockPose}
+            lookTarget={isFlyingOrMorphing ? null : lookTarget}
           />
         </div>
       </div>
+
+      {/* 桌宠三步番茄时钟配置卡（选时长 -> 选任务 -> 确认起飞） */}
+      {focusSetupOpen && !callOpen && focusStage === "idle" && (
+        <PetFocusSetupCard
+          initialMinutes={focusClock.focusMinutes}
+          dndEnabled={dndEnabled}
+          onConfirm={handleConfirmFocusSetup}
+          onClose={() => {
+            setFocusSetupOpen(false);
+            triggerEmotion("idle", 0);
+          }}
+        />
+      )}
 
       {/* 桌宠实时语音通话浮动控制卡 */}
       {callOpen && (

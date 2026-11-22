@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.local_auth import LocalTokenMiddleware, ensure_local_token
 from app.core.logging import get_logger
 from app.database import init_db
-from app.routers import chat, focus, habits, logs, memories, reports, schedule, settings, tasks, voice, voice_call
+from app.routers import chat, focus, habits, logs, memories, reports, schedule, settings, tasks, tools, voice, voice_call
 from app.services.llm.client import close_all_llm_clients
 from app.services.model_catalog import start_model_download_if_missing
 from app.services.scheduler_service import shutdown_scheduler, start_scheduler
@@ -76,6 +76,7 @@ app.include_router(settings.router)
 app.include_router(chat.router)
 app.include_router(voice.router)
 app.include_router(voice_call.router)
+app.include_router(tools.router)
 
 
 @app.get("/api/health")

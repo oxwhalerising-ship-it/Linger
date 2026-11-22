@@ -6,8 +6,34 @@
 import { useSyncExternalStore } from "react";
 
 export type FocusPhase = "idle" | "focus" | "short" | "long";
-export type FocusMinutes = 15 | 25 | 45;
+export type FocusMinutes = number;
 export type FocusMode = "pomodoro" | "stopwatch";
+
+export const PRESET_FOCUS_MINUTES = [15, 25, 45] as const;
+
+export interface FocusControlCommand {
+  action: "start" | "pause" | "resume" | "stop" | "skip_break" | "status";
+  mode?: FocusMode;
+  minutes?: number;
+  task_id?: number | null;
+  task_title?: string;
+  finish_task?: boolean;
+  force?: boolean;
+  open_panel?: boolean;
+}
+
+export interface FocusControlOutcome {
+  ok: boolean;
+  conflict?: boolean;
+  error?: string;
+  state: FocusSnapshot;
+}
+
+function clampFocusMinutes(raw: unknown): number {
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return 25;
+  return Math.max(1, Math.min(180, Math.round(num)));
+}
 
 export interface FocusReport {
   client_id: string;
@@ -35,6 +61,16 @@ export interface FocusSnapshot {
   pending: number;
 }
 
+export interface FocusLifecycleEvent {
+  id: string;
+  type: "focus_completed" | "break_completed";
+  taskTitle: string;
+  focusMinutes: number;
+  round: number;
+  breakType: "short" | "long";
+  mode: FocusMode;
+}
+
 interface ClockState extends Omit<FocusSnapshot, "pending" | "remaining"> {
   remaining: number;
   endsAt: number | null;
@@ -42,6 +78,8 @@ interface ClockState extends Omit<FocusSnapshot, "pending" | "remaining"> {
   startedAt: string;
   sessionDate: string;
   queue: FocusReport[];
+  lastEvent?: FocusLifecycleEvent | null;
+  taskFinished?: boolean;
 }
 
 const STORAGE = "linger.focus.v1";
@@ -70,6 +108,8 @@ function defaults(): ClockState {
     round: 0,
     finishTask: false,
     queue: [],
+    lastEvent: null,
+    taskFinished: false,
   };
 }
 
@@ -85,7 +125,7 @@ function read(): ClockState {
       ...saved,
       queue: Array.isArray(saved.queue) ? saved.queue : [],
       mode: saved.mode === "stopwatch" ? "stopwatch" : "pomodoro",
-      focusMinutes: saved.focusMinutes === 15 || saved.focusMinutes === 45 ? saved.focusMinutes : 25,
+      focusMinutes: saved.focusMinutes != null ? clampFocusMinutes(saved.focusMinutes) : 25,
     };
   } catch {
     return base;
@@ -100,6 +140,45 @@ let flushing = false;
 let audio: AudioContext | null = null;
 let sink: ((item: FocusReport) => Promise<void>) | null = null;
 const listeners = new Set<() => void>();
+const lifecycleListeners = new Set<(event: FocusLifecycleEvent) => void>();
+let lastEmittedEventId = state.lastEvent?.id ?? "";
+
+function emitLifecycleIfNew(evt: FocusLifecycleEvent | null | undefined) {
+  if (!evt || !evt.id || evt.id === lastEmittedEventId) return;
+  lastEmittedEventId = evt.id;
+  lifecycleListeners.forEach((fn) => {
+    try {
+      fn(evt);
+    } catch {
+      // ignore listener errors
+    }
+  });
+}
+
+function broadcastStateToPeer() {
+  try {
+    const { queue: _omitQueue, ...syncPayload } = state;
+    window.taiwanBotEnv?.syncFocusState?.(syncPayload as unknown as Record<string, unknown>);
+  } catch {
+    // ignore in non-Electron browser
+  }
+}
+
+function applyExternalState(raw: Partial<ClockState>) {
+  if (!raw || typeof raw !== "object") return;
+  const next: ClockState = {
+    ...state,
+    ...raw,
+    // 保留本窗口自己的待上传队列，防止跨窗口覆盖丢失离线补传记录
+    queue: state.queue,
+    mode: raw.mode === "stopwatch" ? "stopwatch" : "pomodoro",
+    focusMinutes: raw.focusMinutes != null ? clampFocusMinutes(raw.focusMinutes) : state.focusMinutes,
+  };
+  state = next;
+  if (state.running) ensureTicker();
+  publish();
+  emitLifecycleIfNew(state.lastEvent);
+}
 
 function currentRemaining() {
   if (state.running && state.endsAt) return Math.max(0, Math.ceil((state.endsAt - Date.now()) / 1000));
@@ -136,11 +215,14 @@ function publish() {
   listeners.forEach((fn) => fn());
 }
 
-function persist() {
+function persist(broadcast = false) {
   try {
     localStorage.setItem(STORAGE, JSON.stringify(state));
   } catch {
     /* 本机存不下倒计时时，这一轮仍然可以走完 */
+  }
+  if (broadcast) {
+    broadcastStateToPeer();
   }
 }
 
@@ -182,7 +264,7 @@ function idleClock() {
   return { planned, remaining: planned };
 }
 
-function goIdle() {
+function goIdle(lifecycleEvent?: FocusLifecycleEvent | null) {
   state = {
     ...state,
     phase: "idle",
@@ -192,12 +274,14 @@ function goIdle() {
     ...idleClock(),
     startedAt: "",
     sessionDate: "",
+    ...(lifecycleEvent !== undefined ? { lastEvent: lifecycleEvent } : {}),
   };
-  persist();
+  persist(true);
   publish();
+  if (lifecycleEvent) emitLifecycleIfNew(lifecycleEvent);
 }
 
-function beginBreak(phase: "short" | "long", round: number) {
+function beginBreak(phase: "short" | "long", round: number, lifecycleEvent?: FocusLifecycleEvent | null) {
   const planned = BREAKS[phase];
   state = {
     ...state,
@@ -209,10 +293,12 @@ function beginBreak(phase: "short" | "long", round: number) {
     startedAt: new Date().toISOString(),
     sessionDate: todayStamp(),
     endsAt: Date.now() + planned * 1000,
+    ...(lifecycleEvent !== undefined ? { lastEvent: lifecycleEvent } : {}),
   };
-  persist();
+  persist(true);
   ensureTicker();
   publish();
+  if (lifecycleEvent) emitLifecycleIfNew(lifecycleEvent);
 }
 
 function enqueue(natural: boolean) {
@@ -236,13 +322,40 @@ function settle(natural: boolean, audible: boolean) {
   if (settling || state.phase === "idle") return;
   settling = true;
   const phase = state.phase;
+  const completedTaskTitle = state.taskTitle;
+  const completedFocusMinutes = state.focusMinutes;
+  const completedMode = state.mode;
+  const autoFinished = natural && phase === "focus" && state.finishTask && state.taskId != null;
   try {
     enqueue(natural);
     if (natural && audible) chime(phase === "focus");
     if (natural && phase === "focus") {
       const next = state.round + 1;
-      if (next >= 4) beginBreak("long", 0);
-      else beginBreak("short", next);
+      const breakPhase: "short" | "long" = next >= 4 ? "long" : "short";
+      if (autoFinished) {
+        state = { ...state, taskFinished: true };
+      }
+      const evt: FocusLifecycleEvent = {
+        id: crypto.randomUUID(),
+        type: "focus_completed",
+        taskTitle: completedTaskTitle,
+        focusMinutes: completedFocusMinutes,
+        round: next,
+        breakType: breakPhase,
+        mode: completedMode,
+      };
+      beginBreak(breakPhase, next >= 4 ? 0 : next, evt);
+    } else if (natural && (phase === "short" || phase === "long")) {
+      const evt: FocusLifecycleEvent = {
+        id: crypto.randomUUID(),
+        type: "break_completed",
+        taskTitle: completedTaskTitle,
+        focusMinutes: completedFocusMinutes,
+        round: state.round,
+        breakType: phase,
+        mode: completedMode,
+      };
+      goIdle(evt);
     } else {
       goIdle();
     }
@@ -331,7 +444,7 @@ export function startFocus() {
       startedAt: fresh ? new Date().toISOString() : state.startedAt,
       sessionDate: fresh ? todayStamp() : state.sessionDate,
     };
-    persist();
+    persist(true);
     ensureTicker();
     publish();
     return;
@@ -339,7 +452,7 @@ export function startFocus() {
   if (state.phase !== "idle") {
     const remaining = currentRemaining();
     state = { ...state, running: true, endsAt: Date.now() + remaining * 1000, remaining };
-    persist();
+    persist(true);
     ensureTicker();
     publish();
     return;
@@ -354,8 +467,9 @@ export function startFocus() {
     startedAt: new Date().toISOString(),
     sessionDate: todayStamp(),
     endsAt: Date.now() + planned * 1000,
+    taskFinished: false,
   };
-  persist();
+  persist(true);
   ensureTicker();
   publish();
 }
@@ -367,7 +481,7 @@ export function pauseFocus() {
   } else {
     state = { ...state, running: false, endsAt: null, remaining: currentRemaining() };
   }
-  persist();
+  persist(true);
   publish();
 }
 
@@ -402,7 +516,7 @@ export function setFocusMode(mode: FocusMode) {
   if (state.phase !== "idle" || state.mode === mode) return;
   state = { ...state, mode };
   state = { ...state, ...idleClock() };
-  persist();
+  persist(true);
   publish();
 }
 
@@ -431,23 +545,152 @@ export function skipBreak() {
 
 export function setFocusMinutes(minutes: FocusMinutes) {
   if (state.phase !== "idle" || state.mode !== "pomodoro") return;
-  state = { ...state, focusMinutes: minutes, planned: minutes * 60, remaining: minutes * 60 };
-  persist();
+  const clamped = clampFocusMinutes(minutes);
+  state = { ...state, focusMinutes: clamped, planned: clamped * 60, remaining: clamped * 60 };
+  persist(true);
   publish();
 }
 
 export function setFocusTask(id: number | null, title: string) {
   if (state.phase !== "idle") return;
-  state = { ...state, taskId: id, taskTitle: title, finishTask: id ? state.finishTask : false };
-  persist();
+  state = { ...state, taskId: id, taskTitle: title, finishTask: id ? state.finishTask : false, taskFinished: false };
+  persist(true);
   publish();
 }
 
 export function setFinishTask(finishTask: boolean) {
   if (state.phase !== "idle" || state.taskId == null) return;
   state = { ...state, finishTask };
-  persist();
+  persist(true);
   publish();
+}
+
+/** 休息完毕后一键「再来一轮」：沿用上一轮专注时长与未完成绑定任务（若上一轮已自动完成任务则解绑）。 */
+export function startNextPomodoroRound() {
+  if (state.phase === "short" || state.phase === "long") {
+    skipBreak();
+  }
+  if (state.phase !== "idle") return;
+  if (state.taskFinished) {
+    state = { ...state, taskId: null, taskTitle: "", finishTask: false, taskFinished: false };
+  }
+  if (state.mode !== "pomodoro") {
+    setFocusMode("pomodoro");
+  }
+  startFocus();
+}
+
+export function onFocusLifecycle(fn: (event: FocusLifecycleEvent) => void) {
+  lifecycleListeners.add(fn);
+  return () => {
+    lifecycleListeners.delete(fn);
+  };
+}
+
+// 监听跨窗口同步（Electron IPC 实时推送 + 同源 localStorage storage 事件双保险）
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== STORAGE || !event.newValue) return;
+    try {
+      const parsed = JSON.parse(event.newValue) as Partial<ClockState>;
+      applyExternalState(parsed);
+    } catch {
+      // ignore malformed storage sync
+    }
+  });
+  window.taiwanBotEnv?.onFocusStateSynced?.((payload) => {
+    applyExternalState(payload as Partial<ClockState>);
+  });
+}
+
+export function getFocusSnapshot(): FocusSnapshot {
+  return { ...toSnapshot(state), remaining: currentShown() };
+}
+
+/**
+ * 供灵儿工具通过 `/ws/events` 远程操控番茄钟/正计时器：
+ * - 支持自定义 1~180 分钟、任务绑定与完成自动勾掉；
+ * - 已有计时在进行中且 `force !== true` 时不粗暴覆盖，而是返回 `conflict: true` + 当前进度。
+ */
+export function executeFocusCommand(cmd: FocusControlCommand): FocusControlOutcome {
+  const action = cmd.action;
+
+  if (action === "status") {
+    return { ok: true, state: getFocusSnapshot() };
+  }
+
+  if (action === "pause") {
+    if (state.phase === "idle") {
+      return { ok: false, error: "当前没有正在进行的计时器。", state: getFocusSnapshot() };
+    }
+    pauseFocus();
+    return { ok: true, state: getFocusSnapshot() };
+  }
+
+  if (action === "resume") {
+    if (state.phase === "idle") {
+      return { ok: false, error: "当前没有已暂停的计时器。", state: getFocusSnapshot() };
+    }
+    startFocus();
+    return { ok: true, state: getFocusSnapshot() };
+  }
+
+  if (action === "stop") {
+    if (state.phase === "idle") {
+      return { ok: false, error: "当前没有运行中的专注计时。", state: getFocusSnapshot() };
+    }
+    if (state.phase === "short" || state.phase === "long") {
+      skipBreak();
+    } else {
+      stopFocus();
+    }
+    return { ok: true, state: getFocusSnapshot() };
+  }
+
+  if (action === "skip_break") {
+    if (state.phase !== "short" && state.phase !== "long") {
+      return { ok: false, error: "当前不在休息阶段。", state: getFocusSnapshot() };
+    }
+    skipBreak();
+    return { ok: true, state: getFocusSnapshot() };
+  }
+
+  if (action === "start") {
+    if (state.phase !== "idle") {
+      if (!cmd.force) {
+        return {
+          ok: false,
+          conflict: true,
+          error: "当前已有正在进行的计时器。",
+          state: getFocusSnapshot(),
+        };
+      }
+      if (state.phase === "short" || state.phase === "long") {
+        skipBreak();
+      } else {
+        stopFocus();
+      }
+    }
+
+    const nextMode: FocusMode = cmd.mode === "stopwatch" ? "stopwatch" : "pomodoro";
+    setFocusMode(nextMode);
+    if (nextMode === "pomodoro" && cmd.minutes != null) {
+      setFocusMinutes(cmd.minutes);
+    }
+    if (cmd.task_id !== undefined || cmd.task_title !== undefined) {
+      setFocusTask(
+        typeof cmd.task_id === "number" ? cmd.task_id : null,
+        String(cmd.task_title || "").trim(),
+      );
+    }
+    if (typeof cmd.finish_task === "boolean" && state.taskId != null) {
+      setFinishTask(cmd.finish_task);
+    }
+    startFocus();
+    return { ok: true, state: getFocusSnapshot() };
+  }
+
+  return { ok: false, error: "未知的番茄钟控制指令。", state: getFocusSnapshot() };
 }
 
 function subscribe(fn: () => void) {

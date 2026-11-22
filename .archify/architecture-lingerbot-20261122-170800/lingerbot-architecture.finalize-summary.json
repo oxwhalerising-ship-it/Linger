@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "D:\\02_LingerBot\\.archify\\architecture-lingerbot-20261122-170800\\candidate.json",
+    "sha256": "aac7b62e7961f451382f13746ffd4e290a1e46b403ad8fd3eb728238c02fb70b",
+    "bytes": 13873
+  },
+  "artifact": {
+    "path": "D:\\02_LingerBot\\.archify\\architecture-lingerbot-20261122-170800\\lingerbot-architecture.html",
+    "sha256": "26675a6d06e0e5d2e37288527db8b7f94cba78357c396fbcc6ed984a0c94a695",
+    "bytes": 880648
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "D:\\02_LingerBot\\.archify\\architecture-lingerbot-20261122-170800\\lingerbot-architecture.finalize.json",
+    "summaryReceipt": "D:\\02_LingerBot\\.archify\\architecture-lingerbot-20261122-170800\\lingerbot-architecture.finalize-summary.json",
+    "browserCheckReceipt": "D:\\02_LingerBot\\.archify\\architecture-lingerbot-20261122-170800\\lingerbot-architecture.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-22T09:12:51.975Z",
+    "source": "network",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 4401,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "routesOverSuggestedBends": 1
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [],
+      "detours": [
+        {
+          "relationship": {
+            "id": "proactive-to-bus",
+            "from": "proactive_engine",
+            "to": "api_gateway",
+            "label": "推送 /ws/events",
+            "collectionIndex": 8,
+            "artifactIndex": 9
+          },
+          "bends": 3,
+          "stretch": 1.195
+        }
+      ],
+      "truncated": false
+    },
+    "hints": [
+      "proactive_engine → api_gateway needs 3 bends: move node proactive_engine or api_gateway so they share a row or column with matching centers, or sit diagonally with a clear corner."
+    ],
+    "repair": "Trace these relationships at the desktop viewport. For Architecture, use references/architecture-layout-repair.md: reflow a blocked main path or tangled connected scene, and repair an isolated defect locally only when the surrounding composition is accepted. Preserve all semantic content and user-fixed geometry. Rerun finalize once after the edit."
+  }
+}

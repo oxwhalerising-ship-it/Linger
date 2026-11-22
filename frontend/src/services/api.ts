@@ -452,6 +452,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  focusCompanionMessage: (payload: {
+    event: "focus_completed" | "break_completed";
+    task_title?: string;
+    focus_minutes?: number;
+    round?: number;
+    break_type?: "short" | "long";
+    mode?: "pomodoro" | "stopwatch";
+  }) =>
+    requestJson<{
+      reply: string;
+      sentences: string[];
+      emotion: string;
+      suggestion_tag: string;
+      used_fallback: boolean;
+    }>("/api/focus/companion-message", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   // 每日复盘与月度热力图
   getMonthlyLogs: (month: string) =>

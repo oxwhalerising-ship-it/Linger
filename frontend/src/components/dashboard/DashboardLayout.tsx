@@ -8,7 +8,14 @@ import SettingsView from "./SettingsView";
 import HistoryView from "./HistoryView";
 import PlanView, { type PlanSection } from "./PlanView";
 import { Today, InsightsPage, Memories, Joys, Review, periodEnd } from "./CompanionPages";
-import { formatClock, setFocusSink, useFocusClock } from "../../services/focusClock";
+import {
+  executeFocusCommand,
+  formatClock,
+  setFocusSink,
+  useFocusClock,
+  type FocusControlCommand,
+} from "../../services/focusClock";
+import { connectDashboardEvents } from "../../services/dashboardEvents";
 import "./companion.css";
 const nav = [
   ["today", "今天", IconCalendar], ["plan", "安排", IconClock], ["chat", "对话", IconChat], ["insights", "洞察", IconAnalytics],
@@ -66,31 +73,139 @@ export default function DashboardLayout() {
   const [serviceDetail, setServiceDetail] = useState("");
   useEffect(() => {
     let live = true;
+    let isReady = false;
+    let timer: number | null = null;
+    const scheduleNext = () => {
+      if (!live) return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void check(), isReady ? 5000 : 700);
+    };
     async function check() {
       try {
         await api.getHealth();
         if (!live) return;
+        const wasReady = isReady;
+        isReady = true;
         setReady(true);
+        if (!wasReady) {
+          window.dispatchEvent(new Event("linger-backend-ready"));
+        }
         const models = await api.getModelStatus();
         if (live) setServiceDetail(models.downloading ? "正在下载语音模型" : models.error ? "语音模型下载失败" :
           models.missing.length ? "语音模型未就绪" : "");
       } catch {
-        if (live) { setReady(false); setServiceDetail("等待本地服务"); }
+        if (live) {
+          isReady = false;
+          setReady(false);
+          setServiceDetail((prev) => prev || "等待本地服务");
+        }
+      } finally {
+        scheduleNext();
       }
     }
+    void window.taiwanBotEnv?.getBackendStatus?.().then((status) => {
+      if (!live || !status) return;
+      if (status.state !== "ready") setServiceDetail(status.detail);
+      if (status.state === "ready") void check();
+    }).catch(() => {});
     void check();
-    const timer = setInterval(check, 5000);
     const unsubscribe = window.taiwanBotEnv?.onBackendStatus?.(event => {
-      if (event.state !== "ready") setServiceDetail(event.detail);
-      if (event.state === "down") setReady(false);
+      if (event.state === "ready") {
+        void check();
+        return;
+      }
+      setServiceDetail(event.detail);
+      if (event.state === "down") {
+        isReady = false;
+        setReady(false);
+      }
     });
-    return () => { live = false; clearInterval(timer); unsubscribe?.(); };
+    return () => {
+      live = false;
+      if (timer !== null) window.clearTimeout(timer);
+      unsubscribe?.();
+    };
   }, []);
   const parent = page === "history" ? "chat" : page === "reports" ? "insights" : page;
   const openPlan = (section: PlanSection) => {
     setPlanSection(section);
     setPage("plan");
   };
+  const applyNavigateTarget = useCallback((target: DashboardNavigateTarget) => {
+    const rawPage = String(target.page || "").trim().toLowerCase();
+    if (rawPage === "tasks" || rawPage === "focus" || rawPage === "habits") {
+      setPlanSection(rawPage);
+      setPage("plan");
+      return;
+    }
+    if (rawPage === "plan") {
+      if (target.planSection) setPlanSection(target.planSection);
+      setPage("plan");
+      return;
+    }
+    if (rawPage === "journal") {
+      setDay(target.date || undefined);
+      setPage("journal");
+      return;
+    }
+    if (
+      rawPage === "today" ||
+      rawPage === "chat" ||
+      rawPage === "insights" ||
+      rawPage === "joy" ||
+      rawPage === "memory" ||
+      rawPage === "settings" ||
+      rawPage === "history" ||
+      rawPage === "reports"
+    ) {
+      setPage(rawPage);
+      setCompose(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const offNavigate = window.taiwanBotEnv?.onDashboardNavigate?.((target) => {
+      applyNavigateTarget(target);
+    });
+    const offEvents = connectDashboardEvents({
+      onUiCommand: (action, payload) => {
+        if (action === "focus_control") {
+          const cmd = payload as unknown as FocusControlCommand;
+          const outcome = executeFocusCommand(cmd);
+          if (outcome.ok && cmd.open_panel === true && cmd.action !== "status") {
+            setPlanSection("focus");
+            setPage("plan");
+            window.taiwanBotEnv?.openDashboard?.({ page: "plan", planSection: "focus" });
+          }
+          return {
+            ok: outcome.ok,
+            result: {
+              conflict: Boolean(outcome.conflict),
+              state: outcome.state,
+            },
+            error: outcome.error,
+          };
+        }
+        if (action === "navigate") {
+          const target: DashboardNavigateTarget = {
+            page: String(payload.page || "today"),
+            date: typeof payload.date === "string" ? payload.date : undefined,
+          };
+          applyNavigateTarget(target);
+          window.taiwanBotEnv?.openDashboard?.(target);
+          return { ok: true, result: { page: target.page } };
+        }
+        return { ok: false, error: `未知的面板指令：${action}` };
+      },
+    });
+    const onDataChanged = () => setRevision((n) => n + 1);
+    window.addEventListener("linger-data-changed", onDataChanged);
+    return () => {
+      offNavigate?.();
+      offEvents();
+      window.removeEventListener("linger-data-changed", onDataChanged);
+    };
+  }, [applyNavigateTarget]);
   useEffect(() => {
     setFocusSink(async (item) => {
       await api.recordFocus({
@@ -148,7 +263,7 @@ export default function DashboardLayout() {
         {clock.taskTitle ? ` · ${clock.taskTitle}` : ""}
       </button>}
 
-      {page === "today" && <Today key={String(ready)} send={start} habits={() => openPlan("habits")} tasks={() => openPlan("tasks")} focus={() => openPlan("focus")} insights={() => {
+      {page === "today" && <Today ready={ready} send={start} habits={() => openPlan("habits")} tasks={() => openPlan("tasks")} focus={() => openPlan("focus")} insights={() => {
         setPeriod("weekly");
         setOffset(0);
         setPage("insights");

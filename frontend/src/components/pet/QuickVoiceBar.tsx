@@ -46,13 +46,13 @@ export default function QuickVoiceBar({
       onSubmit={handleSubmit}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-      className="w-[276px] rounded-2xl bg-white/94 backdrop-blur-md border border-sky-200/90 shadow-[0_8px_22px_rgba(37,99,235,0.16)] p-2 flex items-center gap-1.5 animate-bubble-pop"
+      className="apple-sheet w-[276px] rounded-[22px] p-2 flex items-center gap-1.5 animate-bubble-pop"
     >
       <button
         type="button"
         onClick={onStartCall}
         title="直接跟灵儿实时语音打电话"
-        className="w-7 h-7 rounded-xl bg-gradient-to-br from-blue-600 to-sky-500 hover:from-blue-700 hover:to-sky-600 text-white flex items-center justify-center shadow-[0_2px_8px_rgba(37,99,235,0.28)] transition active:scale-95 cursor-pointer shrink-0"
+        className="apple-btn apple-btn-fill w-7 h-7 rounded-full flex items-center justify-center cursor-pointer shrink-0"
       >
         <IconPhone className="w-3.5 h-3.5" />
       </button>
@@ -62,12 +62,12 @@ export default function QuickVoiceBar({
         onChange={(e) => setInput(e.target.value)}
         placeholder="说句话，或点左侧打电话"
         autoFocus
-        className="flex-1 min-w-0 bg-sky-50/75 rounded-xl px-2.5 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-sky-300"
+        className="flex-1 min-w-0 apple-well px-2.5 py-1.5 text-[13px] tracking-[-0.01em] text-[#1d1d1f] placeholder:text-[rgba(60,60,67,0.45)] outline-none focus:bg-white focus:shadow-[0_0_0_3px_rgba(0,113,227,0.28)]"
       />
       <button
         type="submit"
         disabled={sending || !input.trim()}
-        className="px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-700 hover:to-sky-600 disabled:opacity-45 text-white text-xs font-medium transition cursor-pointer shrink-0"
+        className="apple-btn apple-btn-fill px-2.5 py-1.5 text-[12px] disabled:opacity-40 cursor-pointer shrink-0"
       >
         {sending ? "..." : "发送"}
       </button>
@@ -75,7 +75,7 @@ export default function QuickVoiceBar({
         type="button"
         onClick={onOpenDashboard}
         title="打开主控面板"
-        className="px-2 py-1.5 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-700 text-xs transition cursor-pointer shrink-0"
+        className="apple-btn apple-btn-plain px-2 py-1.5 text-[12px] cursor-pointer shrink-0"
       >
         面板
       </button>

@@ -317,6 +317,7 @@ export default function ChatView({threadId, launch, onReview, onMemory, onConsum
       const assistantId = `a-${sentAtMs}`;
       let liveText = "";
       let emotion: PetEmotion = "happy";
+      const liveToolBadges: string[] = [];
       const upsertAssistant = (patch: Partial<LocalChatBubble>) => {
         setMessages((prev) => {
           const idx = prev.findIndex((item) => item.id === assistantId);
@@ -354,6 +355,13 @@ export default function ChatView({threadId, launch, onReview, onMemory, onConsum
             upsertAssistant({ content: liveText });
             player?.push(sentence);
           },
+          onToolAction: (action) => {
+            const badge = action.badge?.trim();
+            if (badge && !liveToolBadges.includes(badge)) {
+              liveToolBadges.push(badge);
+              upsertAssistant({ tags: [...liveToolBadges] });
+            }
+          },
           onReply: (reply) => {
             emotion = reply.emotion || "happy";
             const durationMs = reply.duration_ms ?? Math.max(100, Math.round(performance.now() - startedPerf));
@@ -361,6 +369,7 @@ export default function ChatView({threadId, launch, onReview, onMemory, onConsum
               content: reply.reply,
               sentences: reply.sentences,
               durationMs,
+              ...(liveToolBadges.length > 0 ? { tags: [...liveToolBadges] } : {}),
             });
             setBotEmotion(emotion);
             window.taiwanBotEnv?.sendPetPreviewState({
@@ -369,15 +378,26 @@ export default function ChatView({threadId, launch, onReview, onMemory, onConsum
             });
           },
         });
-        const tags = archiveTags(res.extracted);
+        const mergedTags: string[] = [...liveToolBadges];
+        for (const action of res.tool_actions || []) {
+          const badge = action.badge?.trim();
+          if (badge && !mergedTags.includes(badge)) {
+            mergedTags.push(badge);
+          }
+        }
+        for (const tag of archiveTags(res.extracted)) {
+          if (tag && !mergedTags.includes(tag)) {
+            mergedTags.push(tag);
+          }
+        }
         if (res.used_offline_fallback) {
-          tags.push("离线演示回复");
+          mergedTags.push("离线演示回复");
         }
         emotion = res.emotion || emotion;
         upsertAssistant({
           content: res.reply,
           sentences: res.sentences,
-          tags,
+          tags: mergedTags,
           pendingArchive:res.archive_failed?res.source_id:undefined,
           durationMs: res.duration_ms ?? Math.max(100, Math.round(performance.now() - startedPerf)),
         });
@@ -740,7 +760,7 @@ export default function ChatView({threadId, launch, onReview, onMemory, onConsum
             <button
               type="button"
               onClick={handleOpenVoiceCall}
-              className="h-8 px-3 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] text-white flex items-center gap-1.5 text-[12px] font-medium shadow-[0_2px_8px_rgba(37,99,235,0.24)] transition-all active:scale-95 cursor-pointer"
+              className="apple-btn apple-btn-fill h-8 px-3 flex items-center gap-1.5 text-[13px] cursor-pointer"
             >
               <IconPhone className="w-3.5 h-3.5" />
               <span>实时通话</span>
@@ -800,7 +820,7 @@ export default function ChatView({threadId, launch, onReview, onMemory, onConsum
 
               {speedMenuOpen && (
                 <div
-                  className="absolute right-0 top-full mt-2 w-[164px] rounded-2xl bg-[var(--bg-elevated)] p-1.5 z-30 animate-popover"
+                  className="absolute right-0 top-full mt-2 w-[164px] rounded-2xl bg-[var(--bg-elevated)] p-1.5 z-30 animate-popover shadow-[var(--popover-shadow)] origin-top-right"
                   style={{ boxShadow: "var(--popover-shadow)" }}
                 >
                   <div className="px-2.5 py-1 text-[11px] font-medium text-[var(--text-tertiary)]">
@@ -1183,7 +1203,7 @@ export default function ChatView({threadId, launch, onReview, onMemory, onConsum
                       type="button"
                       onClick={handleOpenVoiceCall}
                       disabled={isTranscribing}
-                      className="w-9 h-9 rounded-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white shadow-[0_2px_10px_rgba(37,99,235,0.28)] flex items-center justify-center transition-all active:scale-95 cursor-pointer disabled:opacity-35"
+                      className="apple-btn apple-btn-fill w-9 h-9 rounded-full flex items-center justify-center cursor-pointer disabled:opacity-35"
                     >
                       <span className="flex items-center gap-[2.5px]">
                         <span className="w-[2.4px] h-[7px] rounded-full bg-white" />

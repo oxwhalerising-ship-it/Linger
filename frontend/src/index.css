@@ -1,91 +1,116 @@
 @import "tailwindcss";
 
-/* ==================== ChatGPT Desktop 设计令牌体系 ==================== */
+/* ==================== Apple 系统材质与排版令牌 ====================
+   面板是不透明的 macOS 分组背景；浮在桌面上的桌宠才用玻璃。
+   主操作是系统蓝胶囊，按下瞬间缩放，动效默认无过冲。 */
 :root {
-  --bg-canvas: #ffffff;
-  --bg-sidebar: #f2f2f3;
+  --bg-canvas: #f5f5f7;
+  --bg-sidebar: rgba(255, 255, 255, 0.72);
   --bg-surface: #ffffff;
-  --bg-subtle: #f4f4f5;
-  --bg-elevated: #ffffff;
-  --bg-hover: rgba(13, 13, 13, 0.055);
-  --bg-active: rgba(13, 13, 13, 0.09);
+  --bg-subtle: rgba(120, 120, 128, 0.08);
+  --bg-elevated: rgba(255, 255, 255, 0.94);
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-active: rgba(0, 113, 227, 0.12);
 
-  --text-primary: #0d0d0d;
-  --text-secondary: #5d5d5d;
-  --text-tertiary: #8f8f8f;
+  --text-primary: #1d1d1f;
+  --text-secondary: rgba(60, 60, 67, 0.72);
+  --text-tertiary: rgba(60, 60, 67, 0.46);
 
-  --border-subtle: rgba(13, 13, 13, 0.08);
-  --border-strong: rgba(13, 13, 13, 0.15);
+  --border-subtle: rgba(60, 60, 67, 0.12);
+  --border-strong: rgba(60, 60, 67, 0.22);
 
-  --ink-primary: #0d0d0d;
-  --ink-primary-hover: #2a2a2a;
+  --ink-primary: #0071e3;
+  --ink-primary-hover: #0077ed;
   --ink-primary-fg: #ffffff;
 
-  --user-bubble-bg: #f4f4f4;
-  --user-bubble-fg: #0d0d0d;
+  --user-bubble-bg: rgba(120, 120, 128, 0.12);
+  --user-bubble-fg: #1d1d1f;
 
-  --warm-bg: #fdfaf3;
-  --warm-border: rgba(217, 154, 38, 0.22);
-  --warm-text: #85580a;
+  --warm-bg: #fff8eb;
+  --warm-border: rgba(180, 120, 20, 0.22);
+  --warm-text: #8a5a00;
   --warm-muted: #a67c2e;
 
-  --composer-shadow: 0 2px 12px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(13, 13, 13, 0.08);
-  --composer-shadow-focus: 0 6px 24px rgba(0, 0, 0, 0.07), 0 0 0 1px rgba(13, 13, 13, 0.18);
-  --popover-shadow: 0 10px 32px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(13, 13, 13, 0.08);
+  --composer-shadow: 0 1px 1px rgba(0, 0, 0, 0.04), 0 8px 28px rgba(0, 0, 0, 0.06);
+  --composer-shadow-focus: 0 0 0 3px rgba(0, 113, 227, 0.28), 0 10px 28px rgba(0, 0, 0, 0.08);
+  --popover-shadow: 0 18px 50px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
 
-  --scrollbar-thumb: rgba(13, 13, 13, 0.14);
-  --scrollbar-thumb-hover: rgba(13, 13, 13, 0.28);
+  --scrollbar-thumb: rgba(60, 60, 67, 0.22);
+  --scrollbar-thumb-hover: rgba(60, 60, 67, 0.36);
+
+  --apple-blue: #0071e3;
+  --apple-red: #ff3b30;
+  --apple-green: #34c759;
+  --material-thin: rgba(255, 255, 255, 0.72);
+  --material-thick: rgba(255, 255, 255, 0.86);
 
   color-scheme: light;
 }
 
 html.dark {
-  --bg-canvas: #212121;
-  --bg-sidebar: #171717;
-  --bg-surface: #262626;
-  --bg-subtle: #2f2f2f;
-  --bg-elevated: #2a2a2a;
+  --bg-canvas: #000000;
+  --bg-sidebar: rgba(28, 28, 30, 0.86);
+  --bg-surface: #1c1c1e;
+  --bg-subtle: rgba(118, 118, 128, 0.18);
+  --bg-elevated: rgba(44, 44, 46, 0.94);
   --bg-hover: rgba(255, 255, 255, 0.06);
-  --bg-active: rgba(255, 255, 255, 0.1);
+  --bg-active: rgba(10, 132, 255, 0.22);
 
-  --text-primary: #ececec;
-  --text-secondary: #b4b4b4;
-  --text-tertiary: #878787;
+  --text-primary: #f5f5f7;
+  --text-secondary: rgba(235, 235, 245, 0.62);
+  --text-tertiary: rgba(235, 235, 245, 0.38);
 
-  --border-subtle: rgba(255, 255, 255, 0.09);
-  --border-strong: rgba(255, 255, 255, 0.17);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
 
-  --ink-primary: #ffffff;
-  --ink-primary-hover: #e5e5e5;
-  --ink-primary-fg: #0d0d0d;
+  --ink-primary: #0a84ff;
+  --ink-primary-hover: #409cff;
+  --ink-primary-fg: #ffffff;
 
-  --user-bubble-bg: #2f2f2f;
-  --user-bubble-fg: #ececec;
+  --user-bubble-bg: rgba(118, 118, 128, 0.24);
+  --user-bubble-fg: #f5f5f7;
 
-  --warm-bg: rgba(245, 158, 11, 0.08);
-  --warm-border: rgba(245, 158, 11, 0.22);
-  --warm-text: #fcd34d;
-  --warm-muted: #d4a74a;
+  --warm-bg: rgba(255, 159, 10, 0.14);
+  --warm-border: rgba(255, 159, 10, 0.28);
+  --warm-text: #ffd60a;
+  --warm-muted: #ffcc00;
 
-  --composer-shadow: 0 4px 20px rgba(0, 0, 0, 0.26), 0 0 0 1px rgba(255, 255, 255, 0.09);
-  --composer-shadow-focus: 0 8px 28px rgba(0, 0, 0, 0.38), 0 0 0 1px rgba(255, 255, 255, 0.2);
-  --popover-shadow: 0 14px 36px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.1);
+  --composer-shadow: 0 1px 1px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+  --composer-shadow-focus: 0 0 0 3px rgba(10, 132, 255, 0.4), 0 12px 32px rgba(0, 0, 0, 0.4);
+  --popover-shadow: 0 22px 56px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
 
-  --scrollbar-thumb: rgba(255, 255, 255, 0.16);
-  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.34);
+
+  --apple-blue: #0a84ff;
+  --apple-red: #ff453a;
+  --apple-green: #30d158;
+  --material-thin: rgba(28, 28, 30, 0.72);
+  --material-thick: rgba(28, 28, 30, 0.88);
 
   color-scheme: dark;
 }
 
 @layer base {
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
       "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     color: var(--text-primary);
-    background-color: var(--bg-canvas);
+    font-optical-sizing: auto;
+    letter-spacing: -0.011em;
+    line-height: 1.47;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  h1, h2, .apple-display {
+    letter-spacing: -0.028em;
+    line-height: 1.08;
+    font-weight: 700;
+  }
+
+  html:not(.pet-mode) body {
+    background-color: var(--bg-canvas);
   }
 }
 
@@ -176,8 +201,10 @@ html.dark {
 
 /* 透明桌宠模式：强制根元素透明且禁止滚动条与文本选中 */
 html.pet-mode,
-html.pet-mode body {
+html.pet-mode body,
+html.pet-mode #root {
   background: transparent !important;
+  background-color: transparent !important;
   overflow: hidden !important;
   user-select: none;
   -webkit-user-select: none;
@@ -265,11 +292,11 @@ html.pet-mode body {
 @keyframes bubblePopIn {
   0% {
     opacity: 0;
-    transform: translateY(8px) scale(0.94);
+    transform: translateY(6px) scale(0.97);
   }
   100% {
     opacity: 1;
-    transform: translateY(0px) scale(1);
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -302,14 +329,29 @@ html.pet-mode body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .animate-popover,
   .animate-pet-float,
   .animate-pet-bounce,
   .animate-pet-talk,
   .animate-pet-sleepy,
   .animate-pet-encourage,
   .animate-pet-pulse-ring,
-  .animate-bubble-pop {
+  .animate-bubble-pop,
+  .animate-pet-crystal-spin,
+  .animate-pet-crystal-spin-reverse,
+  .animate-pet-crystal-breathe,
+  .animate-pet-morph-flash,
+  .animate-pet-focus-in,
+  .animate-thinking-dot-1,
+  .animate-thinking-dot-2,
+  .animate-thinking-dot-3 {
     animation: none !important;
+  }
+
+  .apple-btn:active,
+  .l-shell button:active {
+    transform: none !important;
   }
 }
 
@@ -345,4 +387,118 @@ html.pet-mode body {
 
 .animate-pet-crystal-breathe {
   animation: petCrystalBreathe 2.4s ease-in-out infinite;
+}
+
+/* 番茄钟变身星辉光效与迷你悬浮卡入场 */
+@keyframes petMorphFlash {
+  0% {
+    opacity: 0;
+    transform: scale(0.45) rotate(-18deg);
+  }
+  45% {
+    opacity: 0.96;
+    transform: scale(1.16) rotate(12deg);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.52) rotate(36deg);
+  }
+}
+
+@keyframes petFocusCardIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.76) translateY(8px);
+  }
+  65% {
+    opacity: 1;
+    transform: scale(1.03) translateY(-1px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-pet-morph-flash {
+  animation: petMorphFlash 0.42s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.animate-pet-focus-in {
+  animation: petFocusCardIn 0.36s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* 浮在任意壁纸上的玻璃层。只用于桌宠，不叠在面板的白卡片上。 */
+.apple-sheet {
+  background: rgba(255, 255, 255, 0.78);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+  border: 0.5px solid rgba(255, 255, 255, 0.72);
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.16),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.85);
+  color: #1d1d1f;
+}
+
+.apple-btn {
+  border-radius: 980px;
+  font-weight: 590;
+  letter-spacing: -0.012em;
+  transition: transform 100ms ease-out, background-color 120ms ease-out, opacity 120ms ease-out;
+}
+
+.apple-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.apple-btn-fill {
+  background: #0071e3;
+  color: #ffffff;
+}
+
+.apple-btn-fill:hover:not(:disabled) {
+  background: #0077ed;
+}
+
+.apple-btn-plain {
+  background: rgba(120, 120, 128, 0.14);
+  color: #1d1d1f;
+}
+
+.apple-btn-plain:hover:not(:disabled) {
+  background: rgba(120, 120, 128, 0.22);
+}
+
+.apple-btn-danger {
+  background: #ff3b30;
+  color: #ffffff;
+}
+
+.apple-btn-danger:hover:not(:disabled) {
+  background: #ff2d20;
+}
+
+.apple-well {
+  background: rgba(120, 120, 128, 0.1);
+  border-radius: 12px;
+}
+
+.apple-caption {
+  color: rgba(60, 60, 67, 0.62);
+  letter-spacing: -0.006em;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .apple-sheet {
+    background: #ffffff;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .apple-sheet {
+    background: #ffffff;
+    border: 1px solid #1d1d1f;
+  }
 }

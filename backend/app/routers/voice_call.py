@@ -28,7 +28,7 @@ from app.services.agent_brain import (
     archive_voice_call_turn_async,
     infer_reply_emotion,
     save_voice_call_messages,
-    stream_voice_call_reply,
+    stream_agent_turn,
 )
 from app.services.stt_service import (
     get_stt_status,
@@ -334,12 +334,62 @@ async def voice_call_websocket(websocket: WebSocket):
 
             consumer_task = asyncio.create_task(tts_sender_loop())
 
-            async for delta in stream_voice_call_reply(
+            tool_actions: list[dict[str, Any]] = []
+            tool_badges: list[str] = []
+            archive_skip_keys: set[str] = set()
+            played_tool_filler = False
+
+            async for evt in stream_agent_turn(
                 user_message=user_text,
                 date_str=today_str,
                 mode=mode,
                 thread_id=thread_id,
+                channel="voice",
             ):
+                evt_type = evt.get("type")
+                if evt_type == "tool_start":
+                    filler_hint = str(evt.get("filler_hint") or "").strip()
+                    if filler_hint and not full_reply_parts and not played_tool_filler:
+                        played_tool_filler = True
+                        synth_task = asyncio.create_task(
+                            _synthesize_clause_bytes(filler_hint, tts_cfg, rate_override, tts_semaphore)
+                        )
+                        spawned_tts_tasks.append(synth_task)
+                        await tts_queue.put((clause_seq, filler_hint, synth_task))
+                        clause_seq += 1
+                    continue
+
+                if evt_type == "tool_result":
+                    action_item = {
+                        "tool": str(evt.get("tool_name") or ""),
+                        "ok": bool(evt.get("ok")),
+                        "badge": evt.get("badge"),
+                        "error": evt.get("error"),
+                    }
+                    tool_actions.append(action_item)
+                    badge_str = str(evt.get("badge") or "").strip()
+                    if badge_str and badge_str not in tool_badges:
+                        tool_badges.append(badge_str)
+                    await safe_send(
+                        {
+                            "type": "tool_action",
+                            "turn_id": turn_id,
+                            **action_item,
+                        }
+                    )
+                    continue
+
+                if evt_type == "turn_meta":
+                    archive_skip_keys.update(evt.get("archive_skip_keys") or [])
+                    continue
+
+                if evt_type != "text_delta":
+                    continue
+
+                delta = str(evt.get("delta") or "")
+                if not delta:
+                    continue
+
                 if first_token_ms is None:
                     first_token_ms = round((time.perf_counter() - llm_t0) * 1000)
 
@@ -441,6 +491,7 @@ async def voice_call_websocket(websocket: WebSocket):
                     "turn_id": turn_id,
                     "reply": full_reply,
                     "emotion": emotion,
+                    "tool_actions": tool_actions,
                     "stt_ms": stt_ms,
                     "llm_first_token_ms": first_token_ms or 0,
                     "first_audio_ms": first_audio_ms or total_ms,
@@ -448,7 +499,7 @@ async def voice_call_websocket(websocket: WebSocket):
                 }
             )
 
-            # 4. 副轨后台异步静默归档：主动避让主轨实时通话，避免与下一轮语音并发抢占同一模型配额
+            # 4. 副轨后台异步静默归档：主动避让主轨实时通话，并对工具已写过的维度智能退让
             async def _bg_archive() -> None:
                 try:
                     await asyncio.sleep(1.5)
@@ -468,12 +519,17 @@ async def voice_call_websocket(websocket: WebSocket):
                         mode=mode,
                         thread_id=thread_id,
                         source_message_id=source_id,
+                        skip_keys=archive_skip_keys,
                     )
+                    merged_tags: list[str] = list(tool_badges)
+                    for tag in result.get("tags") or []:
+                        if tag and tag not in merged_tags:
+                            merged_tags.append(tag)
                     await safe_send(
                         {
                             "type": "archived",
                             "turn_id": turn_id,
-                            "tags": result.get("tags") or [],
+                            "tags": merged_tags,
                             "pending_habits": result.get("pending_habits") or [],
                         }
                     )

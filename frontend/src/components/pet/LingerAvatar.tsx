@@ -23,6 +23,16 @@ import {
   type LingerSymbolType,
 } from "./lingerExpressions";
 
+export interface TomatoClockProp {
+  stage: "pickup" | "ascending" | "landing" | "sitting";
+  timeText: string;
+  progress: number;
+  running: boolean;
+  onBreak: boolean;
+  isStopwatch?: boolean;
+  direction?: "fly-right" | "fly-left" | "none";
+}
+
 export interface LingerAvatarProps {
   emotion: PetEmotion;
   size?: number;
@@ -32,6 +42,12 @@ export interface LingerAvatarProps {
   isDragging?: boolean;
   /** 展开环绕功能按钮时的「双手张开撒向天空」短暂施法动作 */
   isCastingMenu?: boolean;
+  /** 飞行姿态（番茄时钟起飞前往右上角或返回原位时的御风飞行） */
+  flightPose?: "none" | "fly-right" | "fly-left";
+  /** 迷你灵儿托着番茄时钟陪伴姿态 */
+  holdingFocus?: boolean;
+  /** 物理嵌入灵儿怀中的立体番茄造型倒计时时钟（抱起 / 缓慢升空 / 落地坐下陪伴） */
+  tomatoClock?: TomatoClockProp | null;
   /** 靠显示器边缘躲藏偷看 / 靠应用窗口左右边框倚靠 / 上下边框坐下姿态 */
   dockPose?: PetDockPose;
   /** 鼠标视线与头部追踪目标（归一化坐标 x,y ∈ [-1, 1]，null 表示回到自然视线） */
@@ -805,6 +821,9 @@ export default function LingerAvatar({
   patMood = "shy",
   isDragging = false,
   isCastingMenu = false,
+  flightPose = "none",
+  holdingFocus = false,
+  tomatoClock = null,
   dockPose = "none",
   lookTarget = null,
   cleanMode = false,
@@ -824,6 +843,10 @@ export default function LingerAvatar({
   const patMoodRef = useRef(patMood);
   const draggingRef = useRef(isDragging);
   const castingMenuRef = useRef(isCastingMenu);
+  const flightPoseRef = useRef<"none" | "fly-right" | "fly-left">(flightPose);
+  const holdingFocusRef = useRef(holdingFocus);
+  const tomatoClockRef = useRef<TomatoClockProp | null>(tomatoClock);
+  const tomatoStageEnteredMsRef = useRef<number>(performance.now());
   const dockPoseRef = useRef<PetDockPose>(dockPose);
   const lookTargetRef = useRef<{ x: number; y: number } | null>(lookTarget);
 
@@ -871,6 +894,22 @@ export default function LingerAvatar({
   useEffect(() => {
     castingMenuRef.current = isCastingMenu;
   }, [isCastingMenu]);
+
+  useEffect(() => {
+    flightPoseRef.current = flightPose;
+  }, [flightPose]);
+
+  useEffect(() => {
+    holdingFocusRef.current = holdingFocus;
+  }, [holdingFocus]);
+
+  useEffect(() => {
+    const prevStage = tomatoClockRef.current?.stage;
+    tomatoClockRef.current = tomatoClock;
+    if (tomatoClock?.stage && tomatoClock.stage !== prevStage) {
+      tomatoStageEnteredMsRef.current = performance.now();
+    }
+  }, [tomatoClock]);
 
   useEffect(() => {
     dockPoseRef.current = dockPose;
@@ -925,7 +964,7 @@ export default function LingerAvatar({
       let goalAhoge = base.ahogeDeg;
       let goalMouth: LingerMouthShape = base.mouth;
       let goalSymbol: LingerSymbolType = base.symbol;
-      const goalSleepLay = base.motion === "sleep-pillow" ? 1 : 0;
+      let goalSleepLay = base.motion === "sleep-pillow" ? 1 : 0;
 
       // 1. 全身骨骼周期性动态编排
       switch (base.motion) {
@@ -1191,6 +1230,143 @@ export default function LingerAvatar({
         goalAhoge = 18;
       }
 
+      // 2.52 迷你灵儿托着番茄时钟陪伴姿态：双手轻轻向前托举，轻盈呼吸漂浮
+      if (holdingFocusRef.current && flightPoseRef.current === "none" && !draggingRef.current) {
+        goalSleepLay = 0;
+        goalBodyY = -4 + Math.sin(tSec * 2.4) * 4;
+        goalTorsoTilt = Math.sin(tSec * 1.4) * 2.4;
+        goalArmL = 22 + Math.sin(tSec * 2.4) * 3;
+        goalArmR = -22 - Math.sin(tSec * 2.4) * 3;
+        goalLegL = 14 + Math.sin(tSec * 2.8) * 6;
+        goalLegR = -14 - Math.sin(tSec * 2.8) * 6;
+      }
+
+      // 2.55 番茄时钟起飞/返程御风飞行姿态（无怀抱番茄时，如结束后飞回原位）
+      const activeFlight = flightPoseRef.current;
+      const activeTomato = tomatoClockRef.current;
+      if (activeFlight !== "none" && !activeTomato) {
+        const dir = activeFlight === "fly-right" ? 1 : -1;
+        goalSleepLay = 0;
+        goalTorsoTilt = dir * (22 + Math.sin(tSec * 10) * 3.5);
+        goalHeadTilt = -dir * 8 + Math.sin(tSec * 8) * 2.5;
+        goalBodyY = -16 + Math.sin(tSec * 9.5) * 7;
+        goalScaleX = 1.03;
+        goalScaleY = 0.97;
+        goalArmL = 62 + Math.sin(tSec * 13) * 10;
+        goalArmR = -62 - Math.cos(tSec * 13) * 10;
+        goalLegL = -dir * 26 + Math.sin(tSec * 14) * 12;
+        goalLegR = -dir * 16 - Math.sin(tSec * 14) * 12;
+        goalGazeX = dir * 11;
+        goalGazeY = -4;
+        goalAhoge = -dir * 28 + Math.sin(tSec * 16) * 6;
+        goalLowerLid = Math.max(goalLowerLid, 0.25);
+        goalBlush = Math.max(goalBlush, 0.32);
+        goalMouth = "open-happy";
+        goalSymbol = "happy-stars";
+        headLerpRate = 18;
+      }
+
+      // 2.58 真实抱番茄时钟全周期骨骼物理：抱起蓄力 -> 缓慢升空漂浮 -> 落地缓冲坐下 -> 坐地抱着等倒计时
+      if (activeTomato && !draggingRef.current) {
+        const stageElapsed = (now - tomatoStageEnteredMsRef.current) / 1000;
+        goalSleepLay = 0;
+        if (activeTomato.stage === "pickup") {
+          // 抱起瞬间微蹲蓄力，开心低头抱紧怀里的立体番茄
+          const crouch = Math.sin(Math.min(1, stageElapsed / 0.42) * Math.PI);
+          goalBodyY = 24 * crouch;
+          goalScaleY = 1 - 0.085 * crouch;
+          goalScaleX = 1 + 0.06 * crouch;
+          goalTorsoTilt = Math.sin(tSec * 7) * 2.2;
+          goalHeadTilt = 6;
+          goalGazeY = 8;
+          goalArmL = -26;
+          goalArmR = 26;
+          goalLegL = 10 * crouch;
+          goalLegR = -10 * crouch;
+          goalAhoge = 14 + crouch * 10;
+          goalLowerLid = Math.max(goalLowerLid, 0.3);
+          goalBlush = Math.max(goalBlush, 0.34);
+          goalMouth = "open-happy";
+          goalSymbol = "happy-stars";
+          headLerpRate = 16;
+        } else if (activeTomato.stage === "ascending") {
+          // 抱着番茄缓慢升空：轻盈起伏、随飞行方向柔和微倾、小脚丫在空中交替轻摆
+          const dir =
+            activeTomato.direction === "fly-left"
+              ? -1
+              : activeTomato.direction === "fly-right"
+                ? 1
+                : 1;
+          const liftBob = Math.sin(tSec * 5.2) * 10;
+          const takeoffStretch = Math.max(0, 1 - stageElapsed / 0.28);
+          goalBodyY = -20 + liftBob;
+          goalScaleY = 1.02 + takeoffStretch * 0.055;
+          goalScaleX = 0.985 - takeoffStretch * 0.035;
+          goalTorsoTilt = dir * (11.5 + Math.sin(tSec * 4.4) * 3.2);
+          goalHeadTilt = -dir * 5.5 + Math.sin(tSec * 3.8) * 2.5;
+          goalGazeX = dir * 9;
+          goalGazeY = -5;
+          goalArmL = -24 + Math.sin(tSec * 5.2) * 2.5;
+          goalArmR = 24 - Math.sin(tSec * 5.2) * 2.5;
+          goalLegL = -dir * 16 + Math.sin(tSec * 9.5) * 14;
+          goalLegR = -dir * 10 - Math.sin(tSec * 9.5) * 14;
+          goalAhoge = -dir * 22 + Math.sin(tSec * 10) * 6;
+          goalLowerLid = Math.max(goalLowerLid, 0.24);
+          goalBlush = Math.max(goalBlush, 0.3);
+          goalMouth = "open-happy";
+          goalSymbol = "happy-stars";
+          headLerpRate = 13;
+        } else if (activeTomato.stage === "landing") {
+          // 抵达主屏右上角：柔软缓冲落地并坐下
+          const bounce = Math.sin(Math.min(1, stageElapsed / 0.36) * Math.PI);
+          goalBodyY = 56 + bounce * 10;
+          goalScaleY = 0.93 - bounce * 0.055;
+          goalScaleX = 1.05 + bounce * 0.045;
+          goalTorsoTilt = Math.sin(tSec * 4) * 2;
+          goalHeadTilt = 4;
+          goalArmL = -24;
+          goalArmR = 24;
+          goalLegL = 44;
+          goalLegR = -44;
+          goalLowerLid = Math.max(goalLowerLid, 0.26);
+          goalMouth = "soft-smile";
+          headLerpRate = 15;
+        } else {
+          // sitting：稳稳坐在地上抱着番茄时钟，带自然呼吸、轻晃小脚与周期性低头瞄时间
+          const breathe = Math.sin(tSec * 2.0);
+          const glanceCycle = tSec % 7.2;
+          const glancingDown = glanceCycle > 4.8 && glanceCycle < 6.5 && !lookTargetRef.current;
+          goalBodyY = 54 + breathe * 2.8;
+          goalScaleY = 0.945 + breathe * 0.008;
+          goalScaleX = 1.038 - breathe * 0.006;
+          goalTorsoTilt = Math.sin(tSec * 1.25) * 2.2;
+          goalArmL = -24 + breathe * 1.8;
+          goalArmR = 24 - breathe * 1.8;
+          // 坐姿双腿自然向前外展并悠闲轻晃小脚丫
+          goalLegL = 46 + Math.sin(tSec * 2.3) * 6.5;
+          goalLegR = -46 - Math.sin(tSec * 2.3 + 0.7) * 6.5;
+          if (!activeTomato.running) {
+            goalHeadTilt = -8 + Math.sin(tSec * 1.4) * 2;
+            goalMouth = "small-o";
+            goalGazeY = 4;
+          } else if (activeTomato.onBreak) {
+            goalHeadTilt = Math.sin(tSec * 1.4) * 4.5;
+            goalLowerLid = Math.max(goalLowerLid, 0.35);
+            goalMouth = "soft-smile";
+          } else if (glancingDown) {
+            // 偶尔低头看一眼怀里的番茄时钟，像在认真帮你守着时间
+            goalHeadTilt = 6.5;
+            goalHeadY = 6;
+            goalGazeY = 10;
+            goalMouth = "soft-smile";
+          } else {
+            goalHeadTilt = Math.sin(tSec * 1.15) * 3.5;
+            goalMouth = "soft-smile";
+          }
+          headLerpRate = 8.5;
+        }
+      }
+
       // 2.6 鼠标在灵儿附近时的丝滑眼睛 + 头部追踪环绕效果（睡觉与摸头中不打断）
       const lt = lookTargetRef.current;
       if (lt && !pattingRef.current && !draggingRef.current && goalSleepLay < 0.5) {
@@ -1403,6 +1579,27 @@ export default function LingerAvatar({
             <stop offset="50%" stopColor="#60A5FA" />
             <stop offset="100%" stopColor="#3B82F6" />
           </linearGradient>
+
+          {/* 3D 立体番茄时钟质感渐变与柔和阴影 */}
+          <filter id={`tomatoShadow-${uid}`} x="-20%" y="-20%" width="140%" height="145%">
+            <feDropShadow dx="0" dy="10" stdDeviation="10" floodColor="#9F1239" floodOpacity="0.28" />
+          </filter>
+          <radialGradient id={`tomatoFocusBody-${uid}`} cx="34%" cy="28%" r="72%">
+            <stop offset="0%" stopColor="#FFA396" />
+            <stop offset="32%" stopColor="#FB5D6B" />
+            <stop offset="72%" stopColor="#E11D48" />
+            <stop offset="100%" stopColor="#9F1239" />
+          </radialGradient>
+          <radialGradient id={`tomatoBreakBody-${uid}`} cx="34%" cy="28%" r="72%">
+            <stop offset="0%" stopColor="#A7F3D0" />
+            <stop offset="38%" stopColor="#34D399" />
+            <stop offset="78%" stopColor="#059669" />
+            <stop offset="100%" stopColor="#047857" />
+          </radialGradient>
+          <linearGradient id={`tomatoLeaf-${uid}`} x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="#4ADE80" />
+            <stop offset="100%" stopColor="#15803D" />
+          </linearGradient>
         </defs>
 
         {/* === 睡觉场景后景道具：3D 立体质感白色蓬松云朵枕头 === */}
@@ -1467,6 +1664,72 @@ export default function LingerAvatar({
               <circle cx="2" cy="1" r="7" fill="#3B82F6" stroke="#FFFFFF" strokeWidth="1.8" />
               <circle cx="0" cy="-1" r="2.2" fill="#E0F2FE" opacity="0.9" />
             </g>
+          </g>
+        )}
+
+        {/* === 坐地抱番茄时的柔和地面接触投影与淡蓝晶云软垫 === */}
+        {tomatoClock && (tomatoClock.stage === "landing" || tomatoClock.stage === "sitting") && (
+          <g className="pointer-events-none">
+            <ellipse
+              cx="258"
+              cy="842"
+              rx="176"
+              ry="34"
+              fill="rgba(56, 189, 248, 0.16)"
+            />
+            <ellipse
+              cx="258"
+              cy="842"
+              rx="142"
+              ry="22"
+              fill="rgba(30, 58, 138, 0.18)"
+            />
+          </g>
+        )}
+
+        {/* === 抱着番茄缓慢升空时的浮力上升气流与飘落星尘 === */}
+        {tomatoClock && tomatoClock.stage === "ascending" && (
+          <g className="pointer-events-none">
+            <ellipse
+              cx="258"
+              cy={818 + ((rig.animTime * 90) % 52)}
+              rx={78 + ((rig.animTime * 60) % 42)}
+              ry="14"
+              fill="none"
+              stroke="#7DD3FC"
+              strokeWidth="4.5"
+              opacity={Math.max(0.1, 0.72 - (((rig.animTime * 90) % 52) / 52) * 0.65).toFixed(2)}
+            />
+            <path
+              d={`M ${136 + Math.sin(rig.animTime * 5) * 8} ${690 + ((rig.animTime * 120) % 130)} Q 124 ${735 + ((rig.animTime * 120) % 130)} 140 ${776 + ((rig.animTime * 120) % 130)}`}
+              fill="none"
+              stroke="#BAE6FD"
+              strokeWidth="6"
+              strokeLinecap="round"
+              opacity="0.7"
+            />
+            <path
+              d={`M ${382 + Math.cos(rig.animTime * 5) * 8} ${670 + ((rig.animTime * 105) % 140)} Q 394 ${716 + ((rig.animTime * 105) % 140)} 378 ${760 + ((rig.animTime * 105) % 140)}`}
+              fill="none"
+              stroke="#93C5FD"
+              strokeWidth="5.5"
+              strokeLinecap="round"
+              opacity="0.65"
+            />
+            {[0, 1, 2].map((idx) => {
+              const drift = ((rig.animTime * (95 + idx * 24) + idx * 45) % 160);
+              const sx = 164 + idx * 94 + Math.sin(rig.animTime * 4 + idx) * 14;
+              const sy = 690 + drift;
+              const op = Math.max(0, 0.9 - drift / 165);
+              return (
+                <path
+                  key={idx}
+                  d={`M ${sx} ${sy - 11} L ${sx + 3} ${sy - 3} L ${sx + 11} ${sy} L ${sx + 3} ${sy + 3} L ${sx} ${sy + 11} L ${sx - 3} ${sy + 3} L ${sx - 11} ${sy} L ${sx - 3} ${sy - 3} Z`}
+                  fill={idx === 1 ? "#FEF08A" : "#E0F2FE"}
+                  opacity={op.toFixed(2)}
+                />
+              );
+            })}
           </g>
         )}
 
@@ -1579,6 +1842,165 @@ export default function LingerAvatar({
                 <image href="./linger/crystal_pendant.png" x="430" y="232" width="50" height="90" />
               </g>
             </g>
+
+            {/* 5. 怀中立体番茄造型倒计时时钟（随躯干呼吸/蓄力/升空/坐下 100% 物理联动） */}
+            {tomatoClock && (() => {
+              const tElapsed = (performance.now() - tomatoStageEnteredMsRef.current) / 1000;
+              const popScale =
+                tomatoClock.stage === "pickup"
+                  ? Math.min(1, 0.38 + Math.min(1, tElapsed / 0.34) * 0.72 - Math.max(0, tElapsed - 0.24) * 0.25)
+                  : 1;
+              const clampedPop = clamp(popScale, 0.38, 1.08);
+              const dialR = 76;
+              const dialC = 2 * Math.PI * dialR;
+              const safeRatio = tomatoClock.isStopwatch
+                ? 1
+                : clamp(tomatoClock.progress, 0, 1);
+              const dialOffset = tomatoClock.isStopwatch ? 0 : dialC * (1 - safeRatio);
+              const leafWobble =
+                tomatoClock.stage === "ascending"
+                  ? Math.sin(rig.animTime * 9) * 8
+                  : Math.sin(rig.animTime * 2.2) * 2.5;
+              const statusText = tomatoClock.onBreak
+                ? "茶歇休息"
+                : !tomatoClock.running
+                  ? "已暂停"
+                  : tomatoClock.isStopwatch
+                    ? "正计时"
+                    : "专注中";
+              const cy = tomatoClock.stage === "sitting" || tomatoClock.stage === "landing" ? 662 : 644;
+
+              return (
+                <g
+                  transform={`translate(258, ${cy}) scale(${clampedPop.toFixed(3)}) translate(-258, ${-cy})`}
+                  className="pointer-events-none"
+                >
+                  {/* 立体饱满番茄本体 */}
+                  <g filter={`url(#tomatoShadow-${uid})`}>
+                    <path
+                      d={`M 258 ${cy - 98}
+                          C 210 ${cy - 108}, 126 ${cy - 76}, 126 ${cy + 4}
+                          C 126 ${cy + 80}, 192 ${cy + 114}, 258 ${cy + 108}
+                          C 324 ${cy + 114}, 390 ${cy + 80}, 390 ${cy + 4}
+                          C 390 ${cy - 76}, 306 ${cy - 108}, 258 ${cy - 98} Z`}
+                      fill={
+                        tomatoClock.onBreak
+                          ? `url(#tomatoBreakBody-${uid})`
+                          : `url(#tomatoFocusBody-${uid})`
+                      }
+                      stroke="#FFFFFF"
+                      strokeWidth="5"
+                    />
+                    {/* 顶部左上晶莹高光弧 */}
+                    <path
+                      d={`M 164 ${cy - 44} Q 186 ${cy - 78} 226 ${cy - 80}`}
+                      fill="none"
+                      stroke="#FFFFFF"
+                      strokeWidth="10"
+                      strokeLinecap="round"
+                      opacity="0.48"
+                    />
+                    <circle cx="154" cy={cy - 18} r="6.5" fill="#FFFFFF" opacity="0.45" />
+                  </g>
+
+                  {/* 顶部 5 叶翠绿立体番茄叶蒂 + 弯曲小果柄 */}
+                  <g transform={`translate(258, ${cy - 94}) rotate(${leafWobble.toFixed(1)})`}>
+                    <path
+                      d="M 0 12 C -18 -14 -52 -10 -60 8 C -36 4 -18 12 -4 18
+                         C -20 14 -36 22 -42 32 C -20 26 -8 22 0 18
+                         C 8 22 20 26 42 32 C 36 22 20 14 4 18
+                         C 18 12 36 4 60 8 C 52 -10 18 -14 0 12 Z"
+                      fill={`url(#tomatoLeaf-${uid})`}
+                      stroke="#FFFFFF"
+                      strokeWidth="3.5"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M 0 8 Q 4 -18 18 -26"
+                      fill="none"
+                      stroke="#16A34A"
+                      strokeWidth="9"
+                      strokeLinecap="round"
+                    />
+                  </g>
+
+                  {/* 番茄正中内嵌晶透圆形时钟表盘 */}
+                  <circle
+                    cx="258"
+                    cy={cy + 10}
+                    r="84"
+                    fill="rgba(255, 255, 255, 0.95)"
+                    stroke={tomatoClock.onBreak ? "#A7F3D0" : "#FFE4E6"}
+                    strokeWidth="4"
+                  />
+                  {/* 表盘内圈细刻度 */}
+                  <circle
+                    cx="258"
+                    cy={cy + 10}
+                    r={dialR}
+                    fill="none"
+                    stroke={tomatoClock.onBreak ? "rgba(16,185,129,0.16)" : "rgba(244,63,94,0.14)"}
+                    strokeWidth="9"
+                  />
+                  {/* 实时消耗进度光弧 */}
+                  <circle
+                    cx="258"
+                    cy={cy + 10}
+                    r={dialR}
+                    fill="none"
+                    stroke={tomatoClock.onBreak ? "#10B981" : "#F43F5E"}
+                    strokeWidth="9"
+                    strokeLinecap="round"
+                    strokeDasharray={dialC}
+                    strokeDashoffset={dialOffset}
+                    transform={`rotate(-90 258 ${cy + 10})`}
+                  />
+                  {/* 超清晰倒计时数字 */}
+                  <text
+                    x="258"
+                    y={cy + 20}
+                    textAnchor="middle"
+                    fill={!tomatoClock.running ? "#94A3B8" : tomatoClock.onBreak ? "#047857" : "#1E293B"}
+                    fontSize="47"
+                    fontWeight="800"
+                    fontFamily="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+                    letterSpacing="-1"
+                  >
+                    {tomatoClock.timeText}
+                  </text>
+                  <text
+                    x="258"
+                    y={cy + 52}
+                    textAnchor="middle"
+                    fill={tomatoClock.onBreak ? "#059669" : "#E11D48"}
+                    fontSize="20"
+                    fontWeight="700"
+                  >
+                    {statusText}
+                  </text>
+
+                  {/* 前景环抱小手与蓝白袖口：真实地抱住番茄左右两侧 */}
+                  <g transform={`translate(132, ${cy + 12}) rotate(-14)`}>
+                    <ellipse cx="4" cy="0" rx="22" ry="26" fill="#F6E5E3" stroke="#D9B8B6" strokeWidth="3" />
+                    <path
+                      d="M -22 -14 Q -8 -20 6 -10 L 2 22 Q -14 26 -26 14 Z"
+                      fill="#EFF6FF"
+                      stroke="#93C5FD"
+                      strokeWidth="3.2"
+                    />
+                  </g>
+                  <g transform={`translate(384, ${cy + 12}) rotate(14)`}>
+                    <ellipse cx="-4" cy="0" rx="22" ry="26" fill="#F6E5E3" stroke="#D9B8B6" strokeWidth="3" />
+                    <path
+                      d="M 22 -14 Q 8 -20 -6 -10 L -2 22 Q 14 26 26 14 Z"
+                      fill="#EFF6FF"
+                      stroke="#93C5FD"
+                      strokeWidth="3.2"
+                    />
+                  </g>
+                </g>
+              );
+            })()}
           </g>
         </g>
 
@@ -1636,6 +2058,56 @@ export default function LingerAvatar({
               </g>
             </g>
           )}
+
+        {/* === 御风飞行星辉尾迹与风纹 === */}
+        {!cleanMode && flightPose !== "none" && (
+          <g
+            className="pointer-events-none"
+            transform={flightPose === "fly-left" ? "translate(512, 0) scale(-1, 1)" : undefined}
+          >
+            <path
+              d={`M ${48 + Math.sin(rig.animTime * 16) * 10} 260 Q 112 248 168 264`}
+              fill="none"
+              stroke="#7DD3FC"
+              strokeWidth="8"
+              strokeLinecap="round"
+              opacity="0.82"
+            />
+            <path
+              d={`M ${28 + Math.cos(rig.animTime * 14) * 12} 332 Q 96 322 154 338`}
+              fill="none"
+              stroke="#BAE6FD"
+              strokeWidth="6"
+              strokeLinecap="round"
+              opacity="0.72"
+            />
+            <path
+              d={`M ${64 + Math.sin(rig.animTime * 18) * 8} 404 Q 118 396 164 410`}
+              fill="none"
+              stroke="#60A5FA"
+              strokeWidth="5"
+              strokeLinecap="round"
+              opacity="0.65"
+            />
+            <g
+              transform={`translate(${86 + Math.sin(rig.animTime * 12) * 8}, ${212 + Math.cos(rig.animTime * 10) * 8}) scale(${(0.9 + Math.sin(rig.animTime * 14) * 0.2).toFixed(2)})`}
+            >
+              <path
+                d="M 0 -16 L 4 -4 L 16 0 L 4 4 L 0 16 L -4 4 L -16 0 L -4 -4 Z"
+                fill="#FEF08A"
+                stroke="#FFFFFF"
+                strokeWidth="2"
+              />
+            </g>
+            <circle
+              cx={54 + Math.cos(rig.animTime * 15) * 10}
+              cy={372 + Math.sin(rig.animTime * 11) * 6}
+              r="7"
+              fill="#93C5FD"
+              opacity="0.85"
+            />
+          </g>
+        )}
 
         {/* === 特色动态表情符号层 === */}
         {!cleanMode && renderEmotionSymbols(rig.symbol, rig.animTime, uid)}

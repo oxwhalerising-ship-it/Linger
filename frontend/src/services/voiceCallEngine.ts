@@ -12,7 +12,7 @@
 
 import { openAuthedWebSocket } from "./api/client";
 import { encodePcmWav16kBuffer } from "./voice/pcmWavEncoder";
-import type { ChatMode } from "./petApi";
+import type { ChatMode, ToolActionEvent } from "./petApi";
 import type { PetEmotion } from "../types/pet";
 
 export type VoiceCallState =
@@ -46,12 +46,14 @@ export interface VoiceCallCallbacks {
   onBotVolume?: (level: number) => void;
   onUserTranscript?: (turnId: number, text: string, sttMs: number) => void;
   onAssistantDelta?: (turnId: number, fullText: string) => void;
+  onToolAction?: (turnId: number, action: ToolActionEvent) => void;
   onGreetingText?: (text: string) => void;
   onTurnDone?: (payload: {
     turnId: number;
     reply: string;
     emotion: PetEmotion;
     latency: VoiceCallLatency;
+    toolActions?: ToolActionEvent[];
   }) => void;
   onArchived?: (payload: {
     turnId: number;
@@ -395,6 +397,16 @@ export class VoiceCallEngine {
       return;
     }
 
+    if (type === "tool_action") {
+      this.callbacks.onToolAction?.(turnId, {
+        tool: String(msg.tool || ""),
+        ok: Boolean(msg.ok),
+        badge: typeof msg.badge === "string" ? msg.badge : null,
+        error: typeof msg.error === "string" ? msg.error : null,
+      });
+      return;
+    }
+
     if (type === "tts_audio") {
       // 如果用户在接通瞬间已经先开口说话，则自动礼让跳过开场问候语，绝不抢嘴
       if (turnId === 0 && this.isCapturingSpeech) {
@@ -427,6 +439,9 @@ export class VoiceCallEngine {
         turnId,
         reply: String(msg.reply || ""),
         emotion: (String(msg.emotion || "happy") as PetEmotion) || "happy",
+        toolActions: Array.isArray(msg.tool_actions)
+          ? (msg.tool_actions as ToolActionEvent[])
+          : undefined,
         latency: {
           sttMs: Number(msg.stt_ms || 0),
           llmFirstTokenMs: Number(msg.llm_first_token_ms || 0),

@@ -20,6 +20,20 @@ _CLIENT_LOCK = threading.Lock()
 # "disabled" | "effort_minimal" | "effort_low" | "none"
 _FAST_THINK_MODE_CACHE: dict[tuple[str, str], str] = {}
 
+# 缓存每个 (base_url.lower(), model.lower()) 是否支持 OpenAI 标准 tools / function calling
+_TOOL_SUPPORT_CACHE: dict[tuple[str, str], bool] = {}
+
+_TOOL_UNSUPPORTED_KEYWORDS = (
+    "tool",
+    "tools",
+    "function_call",
+    "function calling",
+    "tool_choice",
+    "unsupported",
+    "not support",
+    "unrecognized request argument",
+)
+
 
 def get_openai_client(api_key: str, base_url: str, timeout: float = 30.0) -> OpenAI:
     """获取复用长连接的同步 OpenAI 客户端（淘汰时主动关闭底层 httpx 连接池）。"""
@@ -69,6 +83,27 @@ async def close_all_llm_clients() -> None:
 def get_cached_fast_think_mode(base_url: str, model_name: str) -> str | None:
     """统一小写键读取已探测的低思考档位。"""
     return _FAST_THINK_MODE_CACHE.get((base_url.strip().lower(), model_name.strip().lower()))
+
+
+def model_supports_tools(base_url: str, model_name: str) -> bool:
+    """读取缓存的模型 Tool Calling 能力标记（默认乐观为 True，遇到不兼容错误后自动降级缓存为 False）。"""
+    key = (base_url.strip().lower(), model_name.strip().lower())
+    return _TOOL_SUPPORT_CACHE.get(key, True)
+
+
+def mark_tools_unsupported(base_url: str, model_name: str) -> None:
+    """记录指定模型/中转不支持 OpenAI tools 参数，后续轮次直接跳过 tools 以免反复报错。"""
+    key = (base_url.strip().lower(), model_name.strip().lower())
+    _TOOL_SUPPORT_CACHE[key] = False
+
+
+def is_tools_unsupported_error(exc: Exception) -> bool:
+    """判断异常是否由上游模型/中转不支持 Function Calling / tools 参数引起。"""
+    status = getattr(exc, "status_code", None)
+    if status not in (400, 404, 422, 501):
+        return False
+    msg = str(exc).lower()
+    return any(kw in msg for kw in _TOOL_UNSUPPORTED_KEYWORDS)
 
 
 def candidate_fast_think_modes(base_url: str, model_name: str) -> list[str]:
@@ -121,6 +156,8 @@ async def create_async_completion_fast(
             return result
         except Exception as exc:
             last_exc = exc
+            if "tools" in req_kwargs and is_tools_unsupported_error(exc):
+                raise
             if getattr(exc, "status_code", None) == 400:
                 if idx == len(modes) - 1 and "response_format" in req_kwargs:
                     req_kwargs.pop("response_format", None)

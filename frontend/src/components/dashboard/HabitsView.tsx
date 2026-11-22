@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, formatLocalDate, type HabitBoardItem } from "../../services/api";
+import { isNetworkFetchError } from "../../services/api/client";
 import { useToast } from "../../hooks/useToast";
 
 const CATEGORIES = ["生活习惯", "作息睡眠", "运动健康", "学习成长", "情绪自我"];
@@ -25,12 +26,23 @@ export default function HabitsView() {
       setItems(board.items);
       setError("");
     } catch (err) {
+      if (isNetworkFetchError(err)) {
+        setError("");
+        return;
+      }
       setError(err instanceof Error ? err.message : "习惯没有加载出来");
     }
   }, [today]);
 
   useEffect(() => {
     void load();
+    const onReady = () => void load();
+    window.addEventListener("linger-backend-ready", onReady);
+    window.addEventListener("linger-data-changed", onReady);
+    return () => {
+      window.removeEventListener("linger-backend-ready", onReady);
+      window.removeEventListener("linger-data-changed", onReady);
+    };
   }, [load]);
 
   const active = items.filter((item) => item.is_active);

@@ -32,8 +32,26 @@ const lingerEnv = {
   setPetMode: (mode) => {
     ipcRenderer.send("pet:set-mode", mode);
   },
+  flyPetToFocus: () => ipcRenderer.invoke("pet:fly-to-focus"),
+  flyPetBackOrigin: () => ipcRenderer.invoke("pet:fly-back-origin"),
+  syncFocusState: (payload) => {
+    ipcRenderer.send("focus:sync-state", payload);
+  },
+  onPetFlightState: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("pet:flight-state", listener);
+    return () => ipcRenderer.removeListener("pet:flight-state", listener);
+  },
+  onFocusStateSynced: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("focus:state-synced", listener);
+    return () => ipcRenderer.removeListener("focus:state-synced", listener);
+  },
   setPetPeekRevealed: (revealed) => {
     ipcRenderer.send("pet:set-peek-revealed", Boolean(revealed));
+  },
+  notifyPetReady: () => {
+    ipcRenderer.send("pet:ready");
   },
 
   // 双窗口实时语音通话互斥与记录同步
@@ -54,9 +72,15 @@ const lingerEnv = {
     ipcRenderer.send("pet:show-context-menu");
   },
 
-  // 打开主控面板窗口
-  openDashboard: () => {
-    ipcRenderer.send("app:open-dashboard");
+  // 打开主控面板窗口（可选指定目标页面/子页）
+  openDashboard: (target) => {
+    ipcRenderer.send("app:open-dashboard", target);
+  },
+
+  onDashboardNavigate: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("dashboard:navigate", listener);
+    return () => ipcRenderer.removeListener("dashboard:navigate", listener);
   },
 
   // 显示 / 隐藏桌宠浮窗

@@ -1,0 +1,1922 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>灵儿 v2 · 随节奏聚焦的个人正循环原型（PROTOTYPE）</title>
+<style>
+/* ==========================================================================
+   灵儿 v2 · 场景化聚焦原型（白 / 蓝 / 黑 三基调，保留已认可视觉语言）
+   核心升级：从「8 块信息平铺」升级为「当下只聚焦 1 件事 + 随心切换全天清单」
+   ========================================================================== */
+:root {
+  --bg-app: #f6f7f9;
+  --bg-sidebar: #fafafb;
+  --bg-main: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-subtle: #f2f4f7;
+  --bg-hover: #eef1f5;
+  --bg-track: #eceef2;
+
+  --border: #e6e8ec;
+  --border-hover: #cfd5df;
+  --border-strong: #bfc7d5;
+
+  --ink-primary: #111318;
+  --ink-secondary: #4b5563;
+  --ink-muted: #8a94a6;
+  --ink-inverse: #ffffff;
+
+  --blue-primary: #2563eb;
+  --blue-hover: #1d4ed8;
+  --blue-mid: #60a5fa;
+  --blue-soft: #93c5fd;
+  --blue-light: #dbeafe;
+  --blue-tint: #eff6ff;
+  --blue-ring: rgba(37, 99, 235, 0.2);
+
+  --shadow-card: 0 1px 2px rgba(17, 19, 24, 0.03);
+  --shadow-active: 0 1px 3px rgba(17, 19, 24, 0.06), 0 1px 1px rgba(17, 19, 24, 0.03);
+  --shadow-popover: 0 14px 36px rgba(17, 19, 24, 0.11), 0 0 0 1px rgba(17, 19, 24, 0.06);
+
+  --radius-xl: 14px;
+  --radius-lg: 12px;
+  --radius-md: 9px;
+  --radius-sm: 7px;
+  --radius-pill: 999px;
+
+  --hatch: repeating-linear-gradient(-45deg, #f3f4f6, #f3f4f6 3px, #e9ecf0 3px, #e9ecf0 6px);
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+html.dark {
+  --bg-app: #080a0f;
+  --bg-sidebar: #0e1118;
+  --bg-main: #0b0d12;
+  --bg-surface: #131722;
+  --bg-subtle: #1b2130;
+  --bg-hover: #21283a;
+  --bg-track: #1f2636;
+
+  --border: #232a3b;
+  --border-hover: #333e56;
+  --border-strong: #435170;
+
+  --ink-primary: #f3f4f6;
+  --ink-secondary: #a1aab8;
+  --ink-muted: #667289;
+  --ink-inverse: #0b0d12;
+
+  --blue-primary: #3b82f6;
+  --blue-hover: #60a5fa;
+  --blue-mid: #2563eb;
+  --blue-soft: #1d4ed8;
+  --blue-light: rgba(59, 130, 246, 0.24);
+  --blue-tint: rgba(59, 130, 246, 0.13);
+  --blue-ring: rgba(59, 130, 246, 0.32);
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-active: 0 2px 6px rgba(0, 0, 0, 0.35);
+  --shadow-popover: 0 18px 42px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --hatch: repeating-linear-gradient(-45deg, #161b28, #161b28 3px, #1d2435 3px, #1d2435 6px);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink-primary);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.01em;
+}
+.tnum { font-variant-numeric: tabular-nums; }
+button, input, textarea { font: inherit; color: inherit; outline: none; }
+button { cursor: pointer; border: none; background: transparent; }
+
+/* ==================== 桌面应用框架 ==================== */
+.app-shell {
+  display: grid;
+  grid-template-columns: 226px 1fr;
+  height: 100vh;
+  max-width: 1640px;
+  margin: 0 auto;
+  background: var(--bg-main);
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+/* ==================== 极简侧边栏 ==================== */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 14px 12px 12px;
+  gap: 14px;
+  overflow-y: auto;
+}
+
+.brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+}
+
+.brand-left { display: flex; align-items: center; gap: 10px; }
+.brand-mark {
+  width: 28px; height: 28px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 3px;
+  padding: 4px; border-radius: 8px;
+  background: var(--bg-surface); border: 1px solid var(--border);
+}
+.brand-mark span { border-radius: 2.5px; background: var(--ink-primary); }
+.brand-mark span:nth-child(2) { background: var(--blue-primary); border-radius: 4px 2px 2px 2px; }
+.brand-mark span:nth-child(3) { opacity: 0.22; }
+.brand-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.proto-pill { font-size: 9.5px; font-weight: 600; padding: 1px 5px; border-radius: 5px; background: var(--blue-tint); color: var(--blue-primary); }
+.brand-sub { font-size: 11px; color: var(--ink-muted); }
+
+.search-btn {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 10px; background: var(--bg-surface);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  color: var(--ink-muted); font-size: 12.5px; transition: all 0.15s;
+}
+.search-btn:hover { border-color: var(--border-hover); color: var(--ink-secondary); }
+.kbd { font-size: 10.5px; padding: 1px 5px; border-radius: 5px; background: var(--bg-subtle); color: var(--ink-muted); border: 1px solid var(--border); }
+
+.nav-section { display: flex; flex-direction: column; gap: 2px; }
+.nav-label { font-size: 11px; font-weight: 500; color: var(--ink-muted); padding: 2px 8px 5px; }
+.nav-item {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; padding: 7px 10px; border-radius: var(--radius-md);
+  color: var(--ink-secondary); font-size: 13px; font-weight: 500;
+  border: 1px solid transparent; transition: all 0.15s;
+}
+.nav-item:hover { background: var(--bg-hover); color: var(--ink-primary); }
+.nav-item.active {
+  background: var(--bg-surface); color: var(--ink-primary);
+  border-color: var(--border); box-shadow: var(--shadow-active);
+}
+.nav-item-left { display: flex; align-items: center; gap: 9px; }
+.nav-item svg { width: 16px; height: 16px; color: var(--ink-muted); }
+.nav-item.active svg { color: var(--blue-primary); }
+.nav-badge {
+  font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: var(--radius-pill);
+  background: var(--blue-tint); color: var(--blue-primary);
+}
+.nav-badge.muted { background: var(--bg-subtle); color: var(--ink-muted); font-weight: 500; }
+
+.sidebar-divider { height: 1px; background: var(--border); margin: 2px 4px; }
+
+/* 侧栏 · 今日一键生活计时（随时随地灵活触发，不卡死时间！） */
+.quick-life-box { display: flex; flex-direction: column; gap: 5px; padding: 0 2px; }
+.life-trigger {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 10px; border-radius: var(--radius-md);
+  border: 1px solid var(--border); background: var(--bg-surface);
+  font-size: 12.5px; font-weight: 500; color: var(--ink-primary);
+  transition: all 0.15s;
+}
+.life-trigger:hover { border-color: var(--blue-primary); color: var(--blue-primary); }
+.life-trigger.running {
+  background: var(--blue-tint); border-color: var(--blue-primary); color: var(--blue-primary);
+}
+.life-trigger small { font-size: 11px; color: var(--ink-muted); font-weight: 400; }
+.life-trigger.running small { color: var(--blue-primary); font-weight: 600; }
+
+.loop-goal-card {
+  margin-top: auto;
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 12px 13px; box-shadow: var(--shadow-card);
+}
+.loop-goal-top { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--ink-muted); margin-bottom: 5px; }
+.loop-goal-top strong { color: var(--ink-primary); }
+.loop-goal-val { font-size: 12.5px; font-weight: 600; margin-bottom: 8px; }
+.loop-goal-val span { font-weight: 400; color: var(--ink-muted); }
+.progress-track { height: 4px; border-radius: var(--radius-pill); background: var(--bg-track); overflow: hidden; }
+.progress-fill { height: 100%; border-radius: var(--radius-pill); background: var(--blue-primary); transition: width 0.3s ease; }
+
+.sidebar-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 4px 2px; border-top: 1px solid var(--border);
+}
+.owner-info { display: flex; align-items: center; gap: 8px; }
+.owner-avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--blue-tint); color: var(--blue-primary); border: 1px solid var(--blue-light);
+  font-size: 12px; font-weight: 600; display: grid; place-items: center; position: relative;
+}
+.owner-avatar::after {
+  content: ""; position: absolute; right: -1px; bottom: -1px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--blue-primary); border: 2px solid var(--bg-sidebar);
+}
+.icon-btn {
+  width: 28px; height: 28px; border-radius: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--ink-secondary); border: 1px solid transparent; transition: all 0.15s;
+}
+.icon-btn:hover { background: var(--bg-hover); color: var(--ink-primary); }
+.icon-btn.active { background: var(--blue-tint); color: var(--blue-primary); border-color: var(--blue-light); }
+
+/* ==================== 主内容区 ==================== */
+.main-pane { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 15px 24px 12px; gap: 14px; flex-shrink: 0;
+}
+.topbar h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; }
+.topbar-sub { font-size: 12px; color: var(--ink-muted); margin-top: 2px; }
+.topbar-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.segmented {
+  display: inline-flex; align-items: center; background: var(--bg-subtle);
+  border: 1px solid var(--border); border-radius: var(--radius-md); padding: 2px; height: 32px;
+}
+.segmented button {
+  height: 26px; padding: 0 11px; border-radius: 7px;
+  font-size: 12.5px; font-weight: 500; color: var(--ink-secondary); transition: all 0.15s;
+}
+.segmented button.active {
+  background: var(--bg-surface); color: var(--ink-primary); box-shadow: var(--shadow-active);
+}
+
+.btn-primary {
+  height: 36px; padding: 0 16px; border-radius: var(--radius-md);
+  background: var(--ink-primary); color: var(--ink-inverse);
+  font-size: 13px; font-weight: 500;
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.btn-primary:hover { opacity: 0.88; }
+.btn-primary:active { transform: scale(0.98); }
+
+.btn-blue {
+  height: 36px; padding: 0 16px; border-radius: var(--radius-md);
+  background: var(--blue-primary); color: #ffffff;
+  font-size: 13px; font-weight: 500;
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  transition: background 0.15s;
+}
+.btn-blue:hover { background: var(--blue-hover); }
+
+.btn-outline {
+  height: 32px; padding: 0 12px; border-radius: var(--radius-md);
+  border: 1px solid var(--border); background: var(--bg-surface);
+  color: var(--ink-primary); font-size: 12.5px; font-weight: 500;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  transition: all 0.15s;
+}
+.btn-outline:hover { border-color: var(--border-hover); background: var(--bg-subtle); }
+
+/* ==================== 顶部「一日节奏条」（替代 4 格拥挤 KPI，一眼明确此刻） ==================== */
+.rhythm-bar {
+  margin: 0 24px 14px;
+  padding: 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  box-shadow: var(--shadow-card);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.rhythm-steps {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+
+.step-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-secondary);
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.step-pill:hover { background: var(--bg-subtle); color: var(--ink-primary); }
+.step-pill.active {
+  background: var(--ink-primary);
+  color: var(--ink-inverse);
+}
+.step-pill.done-step .step-num {
+  background: var(--blue-tint);
+  color: var(--blue-primary);
+}
+.step-pill.active .step-num {
+  background: rgba(255,255,255,0.18);
+  color: var(--ink-inverse);
+}
+.step-num {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--bg-subtle); color: var(--ink-muted);
+  font-size: 11px; font-weight: 600;
+  display: grid; place-items: center;
+}
+.step-arrow { color: var(--border-strong); font-size: 12px; user-select: none; }
+
+/* 滚动主画布 */
+.main-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ==================== 两栏精简舞台（左 64% 唯一焦点 / 右 36% 灵儿陪伴） ==================== */
+.stage-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.68fr) minmax(310px, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 1080px) {
+  .stage-grid { grid-template-columns: 1fr; }
+}
+.col-stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-card);
+}
+.card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 14px;
+}
+.card-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.card-sub { font-size: 12px; color: var(--ink-muted); margin-top: 2px; }
+
+/* 置顶昨日调整轻条 */
+.adj-slim {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border-radius: var(--radius-lg);
+  background: var(--blue-tint); border: 1px solid var(--blue-light);
+  border-left: 3px solid var(--blue-primary);
+}
+.adj-slim-left { display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 500; }
+.badge-blue {
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: var(--radius-pill);
+  background: var(--bg-surface); color: var(--blue-primary); border: 1px solid var(--blue-light);
+  flex-shrink: 0;
+}
+.badge-gray {
+  font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: var(--radius-pill);
+  background: var(--bg-subtle); color: var(--ink-secondary); border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* ==================== 阶段 1：早间快问快答（极低摩擦点选） ==================== */
+.morning-q-box {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.morning-q-title {
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--ink-primary);
+}
+.choice-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.choice-chip {
+  padding: 7px 13px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-primary);
+  transition: all 0.14s;
+}
+.choice-chip:hover { border-color: var(--blue-primary); color: var(--blue-primary); background: var(--blue-tint); }
+.choice-chip.selected { background: var(--ink-primary); border-color: var(--ink-primary); color: var(--ink-inverse); }
+
+.morning-summary-bar {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.fact-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-surface);
+  font-size: 12.5px;
+}
+.fact-chip strong { color: var(--blue-primary); font-size: 11px; }
+
+/* 昨日交接 + 今日规划双栏 */
+.plan-split {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 14px;
+}
+@media (max-width: 820px) { .plan-split { grid-template-columns: 1fr; } }
+
+.sub-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sub-panel.muted-bg { background: var(--bg-subtle); }
+
+/* 任务行 */
+.black-box {
+  width: 16px; height: 16px; border-radius: 4.5px;
+  border: 1.5px solid var(--border-strong); background: var(--bg-surface);
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  transition: all 0.14s;
+}
+.black-box.checked { background: var(--ink-primary); border-color: var(--ink-primary); color: var(--ink-inverse); }
+
+.task-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 10px; border-radius: var(--radius-md);
+  border: 1px solid transparent; transition: all 0.15s;
+}
+.task-row + .task-row { border-top: 1px solid var(--border); border-radius: 0; }
+.task-row:hover { background: var(--bg-subtle); }
+.task-row.focus-target {
+  background: var(--blue-tint);
+  border: 1px solid var(--blue-light);
+  border-radius: var(--radius-md);
+}
+.task-row.done .task-text { color: var(--ink-muted); text-decoration: line-through; }
+
+.text-input {
+  width: 100%; height: 36px; padding: 0 12px;
+  border-radius: var(--radius-md); border: 1px solid var(--border);
+  background: var(--bg-surface); font-size: 13px; transition: all 0.15s;
+}
+.text-input:focus { border-color: var(--blue-primary); box-shadow: 0 0 0 3px var(--blue-ring); }
+
+/* ==================== 阶段 2/3/4：专注番茄 & 生活活动正计时器 ==================== */
+.hero-timer-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 28px 24px 24px;
+  gap: 16px;
+}
+
+.hero-timer-card.active-blue {
+  background: linear-gradient(180deg, var(--blue-tint) 0%, var(--bg-surface) 58%);
+  border-color: var(--blue-light);
+}
+
+.pulse-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--blue-primary);
+  box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.5);
+  animation: pulse 1.8s infinite;
+  display: inline-block;
+}
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45); }
+  70% { box-shadow: 0 0 0 8px rgba(37, 99, 235, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+}
+
+.ring-box {
+  position: relative;
+  width: 204px;
+  height: 204px;
+  display: grid;
+  place-items: center;
+}
+.ring-box svg { transform: rotate(-90deg); }
+.ring-center { position: absolute; text-align: center; }
+.ring-digits { font-size: 40px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.1; }
+.ring-sub { font-size: 12px; color: var(--ink-muted); margin-top: 4px; }
+
+.stopwatch-digits {
+  font-size: 52px;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+  color: var(--ink-primary);
+}
+
+/* ==================== 右侧陪伴栏 ==================== */
+.chat-stream {
+  display: flex; flex-direction: column; gap: 10px;
+  max-height: 300px; overflow-y: auto; padding-right: 2px;
+}
+.msg-user {
+  background: var(--bg-subtle); padding: 9px 12px;
+  border-radius: 10px; font-size: 13px;
+}
+.extract-line {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  font-size: 11.5px; color: var(--blue-primary); margin-bottom: 3px;
+}
+.msg-bot { font-size: 13px; color: var(--ink-secondary); line-height: 1.55; }
+.msg-bot strong { color: var(--ink-primary); }
+
+.chat-composer {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 6px 5px 11px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--bg-surface);
+}
+.chat-composer:focus-within { border-color: var(--blue-primary); box-shadow: 0 0 0 3px var(--blue-ring); }
+.chat-composer input { flex: 1; border: none; background: transparent; font-size: 13px; min-width: 0; }
+.send-circle {
+  width: 28px; height: 28px; border-radius: 8px;
+  background: var(--ink-primary); color: var(--ink-inverse);
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+
+.alarm-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 12px; border-radius: var(--radius-md);
+  border: 1px solid var(--border); background: var(--bg-surface);
+}
+.alarm-row.highlight { background: var(--blue-tint); border-color: var(--blue-light); }
+.alarm-row + .alarm-row { margin-top: 8px; }
+
+/* 全天清单时间账单 & 周汇总矩阵 */
+.kpi-strip {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: var(--radius-xl); overflow: hidden;
+}
+.kpi-cell { padding: 14px 18px; }
+.kpi-cell + .kpi-cell { border-left: 1px solid var(--border); }
+.kpi-label { font-size: 12px; color: var(--ink-muted); margin-bottom: 6px; }
+.kpi-num { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+
+.matrix-grid { display: grid; gap: 6px; align-items: center; }
+.m-cell {
+  height: 34px; border-radius: 7px; display: grid; place-items: center;
+  font-size: 11px; font-weight: 600; color: transparent; cursor: pointer;
+}
+.m-cell.l0 { background: var(--hatch); }
+.m-cell.l1 { background: #e8eefc; color: var(--blue-primary); }
+.m-cell.l2 { background: #bfdbfe; color: var(--ink-primary); }
+.m-cell.l3 { background: #60a5fa; color: #fff; }
+.m-cell.l4 { background: #2563eb; color: #fff; }
+
+.tri-switch {
+  display: inline-flex; background: var(--bg-subtle); border: 1px solid var(--border);
+  border-radius: 8px; padding: 2px; gap: 2px;
+}
+.tri-switch button { padding: 3px 8px; font-size: 11.5px; font-weight: 500; border-radius: 6px; color: var(--ink-muted); }
+.tri-switch button.s-done { background: var(--blue-primary); color: #fff; }
+.tri-switch button.s-partial { background: var(--blue-light); color: var(--blue-primary); }
+.tri-switch button.s-missed { background: var(--ink-primary); color: var(--ink-inverse); }
+
+/* 桌面提醒模拟浮窗（午饭/晚饭/洗漱闹钟到点提醒） */
+.nudge-banner {
+  position: fixed;
+  right: 24px;
+  top: 20px;
+  width: 336px;
+  background: var(--bg-surface);
+  border: 1px solid var(--blue-light);
+  border-left: 3.5px solid var(--blue-primary);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow-popover);
+  z-index: 70;
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+}
+.nudge-banner.open { display: flex; animation: slideIn 0.22s ease; }
+@keyframes slideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+
+.toast {
+  position: fixed; left: 50%; bottom: 24px;
+  transform: translateX(-50%) translateY(16px);
+  background: var(--ink-primary); color: var(--ink-inverse);
+  padding: 8px 15px; border-radius: var(--radius-pill);
+  font-size: 12.5px; font-weight: 500; opacity: 0; pointer-events: none;
+  transition: all 0.2s; z-index: 90;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <!-- ==================== 左侧极简导航 ==================== -->
+  <aside class="sidebar">
+    <div class="brand-row">
+      <div class="brand-left">
+        <div class="brand-mark"><span></span><span></span><span></span><span></span></div>
+        <div>
+          <div class="brand-title">灵儿 <span class="proto-pill">v2 聚焦版</span></div>
+          <div class="brand-sub">低摩擦个人正循环</div>
+        </div>
+      </div>
+    </div>
+
+    <nav class="nav-section">
+      <div class="nav-label">主视图</div>
+      <button class="nav-item active" data-view="focus-flow">
+        <span class="nav-item-left">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>
+          此刻焦点
+        </span>
+        <span class="nav-badge" id="sideStageTag">早间</span>
+      </button>
+      <button class="nav-item" data-view="full-day">
+        <span class="nav-item-left">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+          今日全清单
+        </span>
+        <span class="nav-badge muted tnum" id="sideRecordCount">4 项</span>
+      </button>
+      <button class="nav-item" data-view="summary">
+        <span class="nav-item-left">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="4" width="18" height="17" rx="2.5"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
+          周 / 月汇总
+        </span>
+      </button>
+    </nav>
+
+    <div class="sidebar-divider"></div>
+
+    <!-- 随时可点的生活计时快捷栏（灵活变通核心！） -->
+    <div>
+      <div class="nav-label">随时一键计时</div>
+      <div class="quick-life-box" id="quickLifeBox"></div>
+    </div>
+
+    <div class="sidebar-divider"></div>
+
+    <!-- 模拟到点提醒演示按钮（方便体验灵儿主动问候） -->
+    <div>
+      <div class="nav-label">体验提醒弹窗</div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px;padding:0 2px">
+        <button class="btn-outline" style="height:26px;font-size:11.5px;padding:0 8px" data-sim-nudge="lunch">模拟午饭提醒</button>
+        <button class="btn-outline" style="height:26px;font-size:11.5px;padding:0 8px" data-sim-nudge="dinner">模拟晚饭提醒</button>
+        <button class="btn-outline" style="height:26px;font-size:11.5px;padding:0 8px" data-sim-nudge="wash">模拟洗漱闹钟</button>
+        <button class="btn-outline" style="height:26px;font-size:11.5px;padding:0 8px" data-sim-nudge="evening">模拟 22:45 复盘</button>
+      </div>
+    </div>
+
+    <!-- 今日循环进度 -->
+    <div class="loop-goal-card">
+      <div class="loop-goal-top">
+        <span>今日自动记录进度</span>
+        <strong class="tnum" id="sidePct">35%</strong>
+      </div>
+      <div class="loop-goal-val tnum" id="sideSummaryText">0 番茄 <span>· 0 生活计时</span></div>
+      <div class="progress-track"><div class="progress-fill" id="sideBar" style="width:35%"></div></div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="owner-info">
+        <div class="owner-avatar">主</div>
+        <div>
+          <div style="font-size:12.5px;font-weight:600">主人</div>
+          <div style="font-size:11px;color:var(--ink-muted)">零摩擦模式已开启</div>
+        </div>
+      </div>
+      <button class="icon-btn" id="toggleThemeBtn" title="切换深浅主题">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16V4z" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ==================== 右侧主视口 ==================== -->
+  <main class="main-pane">
+    <header class="topbar">
+      <div>
+        <h1 id="pageTitle">早间启动</h1>
+        <div class="topbar-sub tnum" id="pageSub">打开电脑第一件事 · 15 秒完成晨间问答与今日任务规划</div>
+      </div>
+      <div class="topbar-controls">
+        <div class="segmented" id="topViewSwitch">
+          <button class="active" data-view="focus-flow">此刻焦点</button>
+          <button data-view="full-day">今日全清单</button>
+          <button data-view="summary">周汇总</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- 一日节奏条：只在「此刻焦点」显示，随时手动点选切换，绝不绑死时间！ -->
+    <div class="rhythm-bar" id="rhythmBar">
+      <div class="rhythm-steps" id="rhythmSteps"></div>
+      <span style="font-size:11.5px;color:var(--ink-muted);padding:0 8px;white-space:nowrap">随时可点切阶段 · 灵活流转</span>
+    </div>
+
+    <div class="main-scroll" id="mainScroll"></div>
+  </main>
+</div>
+
+<!-- 灵儿主动弹出提示框（模拟午饭/晚饭/洗漱闹钟/晚间复盘） -->
+<div class="nudge-banner" id="nudgeBanner"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ==========================================================================
+   v2 场景化流转状态机（全内存演示，零负担体验完整一天）
+   ========================================================================== */
+const STAGES = [
+  { id: "morning", num: 1, short: "早间", label: "早间启动与规划", sub: "打开电脑第一件事 · 15 秒快问快答 + 昨日任务交接" },
+  { id: "work", num: 2, short: "专注", label: "专注推进", sub: "只保留当前任务与 25/5 番茄钟，其余信息退居幕后" },
+  { id: "lunch", num: 3, short: "午间", label: "午间吃饭与承上启下", sub: "一键记录午饭耗时 · 顺带一句上午回顾，丝滑切入下午" },
+  { id: "dinner", num: 4, short: "傍晚", label: "晚饭与洗漱预约", sub: "记录晚饭耗时 · 设定今晚洗漱闹钟与洗漱计时" },
+  { id: "evening", num: 5, short: "复盘", label: "晚间复盘与收口", sub: "白天已自动记好大部分 · 核对剩余习惯，写下明天一条调整" }
+];
+
+const MORNING_QUESTIONS = [
+  { key: "sleep", q: "昨晚睡得怎么样？", chips: ["睡得不错 · 7.5h", "一般 · 6.5h", "醒了两次 · 5.8h", "熬夜了 · 5h"] },
+  { key: "wakeTime", q: "今天早上大概几点起的？", chips: ["07:00", "07:30", "08:00", "08:30", "09:00 以后"] },
+  { key: "breakfast", q: "今天吃早餐了吗？吃了什么？", chips: ["全麦吐司 + 牛奶", "包子豆浆", "燕麦 + 鸡蛋", "黑咖啡（未进食）", "今天没吃"] },
+  { key: "sunlight", q: "早起之后有没有晒会太阳？", chips: ["晒了 10 分钟", "窗边透气了一会", "今天阴天/没晒"] },
+  { key: "vocab", q: "今早按计划背单词了吗？", chips: ["背完了", "背了一部分", "等会儿再背", "今天没有"] }
+];
+
+const state = {
+  view: "focus-flow", // focus-flow | full-day | summary
+  stage: "morning",   // morning | work | lunch | dinner | evening
+  dark: false,
+  prevAdjustment: { text: "23:00 把手机放到书桌充电，不再带进被窝", status: "pending" },
+
+  // 早间 5 问状态
+  morningStep: 0,
+  morningAnswers: {
+    sleep: null,
+    wakeTime: null,
+    breakfast: null,
+    sunlight: null,
+    vocab: null
+  },
+
+  // 昨日交接任务
+  yesterdayDone: [
+    "完成灵儿白蓝黑视觉方向确认",
+    "跑步 30 分钟",
+    "整理个人正循环核心术语表"
+  ],
+  yesterdayCarryOver: [
+    { id: "yc1", title: "把信号表字段拆成单条与多条两组", moved: false },
+    { id: "yc2", title: "测试本地 sherpa-onnx 语音识别延迟", moved: false }
+  ],
+
+  // 今日任务
+  tasks: [
+    { id: "t1", title: "敲定灵儿 v2 场景聚焦布局与优先级", tag: "AI 手艺", important: true, done: false, donePeriod: null },
+    { id: "t2", title: "学习 MCP 工具编排与状态流转设计", tag: "AI 手艺", important: true, done: false, donePeriod: null },
+    { id: "t3", title: "整理本周运动与作息规则草案", tag: "日常", important: false, done: false, donePeriod: null }
+  ],
+  activeTaskId: "t1",
+
+  // 番茄钟（25m 专注 / 5m 休息）
+  pomo: {
+    phase: "focus", // focus | break
+    remaining: 25 * 60,
+    running: false,
+    completedCount: 0,
+    logs: []
+  },
+
+  // 生活活动正计时器（午饭 / 晚饭 / 洗漱）
+  lifeTimers: {
+    lunch:  { label: "吃午饭", status: "idle", seconds: 0, food: "", reviewNote: "", reviewFeeling: "" },
+    dinner: { label: "吃晚饭", status: "idle", seconds: 0, food: "" },
+    wash:   { label: "洗漱（洗澡+刷牙）", status: "idle", seconds: 0, alarmTime: null }
+  },
+  runningLifeKey: null, // lunch | dinner | wash | null
+
+  // 每日习惯（白天下沉，晚间或全清单查看）
+  habits: [
+    { id: "h1", title: "23:00 前上床", cat: "作息", status: "done" },
+    { id: "h2", title: "早起晒太阳", cat: "作息", status: "pending" },
+    { id: "h3", title: "晨间背单词", cat: "专注学习", status: "pending" },
+    { id: "h4", title: "跑步或拉伸 20m", cat: "运动饮食", status: "pending" },
+    { id: "h5", title: "喝足 1.5L 温水", cat: "日常", status: "done" }
+  ],
+
+  // 晚间收口
+  output: "",
+  nextAdjustment: "",
+  tomorrowDrafts: ["明天上午先做 2 个番茄再看消息"],
+
+  // 对话流
+  chat: [
+    {
+      role: "bot",
+      text: "早安主人！先把左边这 5 个晨间小问题点完（大概 15 秒），然后我们一起看一眼昨天留下的待办，排好今天就开干。"
+    }
+  ]
+};
+
+let tickHandle = null;
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
+
+function showToast(msg) {
+  const el = $("#toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => el.classList.remove("show"), 2400);
+}
+
+function fmtHMS(sec) {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function fmtDurationText(sec) {
+  const mins = Math.max(1, Math.round(sec / 60));
+  return `${mins} 分钟`;
+}
+
+function ensureTicker() {
+  if (tickHandle) return;
+  tickHandle = setInterval(() => {
+    let changed = false;
+    if (state.pomo.running && state.pomo.remaining > 0) {
+      state.pomo.remaining--;
+      changed = true;
+    }
+    if (state.runningLifeKey) {
+      state.lifeTimers[state.runningLifeKey].seconds++;
+      changed = true;
+    }
+    if (changed) {
+      updateLiveDigitsOnly();
+    }
+  }, 1000);
+}
+
+function updateLiveDigitsOnly() {
+  const pEl = $("#livePomoDigits");
+  if (pEl) pEl.textContent = fmtHMS(state.pomo.remaining);
+  if (state.runningLifeKey) {
+    const lEl = $("#liveLifeDigits");
+    if (lEl) lEl.textContent = fmtHMS(state.lifeTimers[state.runningLifeKey].seconds);
+    const sEl = $(`#sideLife-${state.runningLifeKey}`);
+    if (sEl) sEl.textContent = fmtHMS(state.lifeTimers[state.runningLifeKey].seconds);
+  }
+}
+
+/* ==================== 启动 / 停止生活计时（午饭 / 晚饭 / 洗漱） ==================== */
+function startLifeTimer(key) {
+  // 若有番茄在跑先自动暂停，减少磨损
+  state.pomo.running = false;
+  if (state.runningLifeKey && state.runningLifeKey !== key) {
+    state.lifeTimers[state.runningLifeKey].status = "done";
+  }
+  state.runningLifeKey = key;
+  state.lifeTimers[key].status = "running";
+  if (key === "lunch") state.stage = "lunch";
+  if (key === "dinner" || key === "wash") state.stage = "dinner";
+  state.view = "focus-flow";
+  $("#nudgeBanner").classList.remove("open");
+  ensureTicker();
+  showToast(`已开始「${state.lifeTimers[key].label}」计时，安心离开电脑吧`);
+  render();
+}
+
+function stopLifeTimer(key) {
+  const t = state.lifeTimers[key];
+  t.status = "done";
+  if (t.seconds < 60) t.seconds = key === "wash" ? 18 * 60 : 26 * 60; // 演示兜底：若几秒内点停止，给出合理分钟方便查看效果
+  if (state.runningLifeKey === key) state.runningLifeKey = null;
+  const dur = fmtDurationText(t.seconds);
+  state.chat.push({
+    role: "bot",
+    extracted: `信号 · ${t.label}耗时 (${dur})`,
+    text: key === "lunch"
+      ? `欢迎回来！这次午饭花了 <strong>${dur}</strong>，已自动记进信号。顺手在左边点一下上午的学习印象，我们就开下午的工。`
+      : key === "dinner"
+        ? `晚饭用了 <strong>${dur}</strong>，已自动入账！顺手定个今晚洗漱（洗澡+刷牙）的闹钟吧，到点我叫你。`
+        : `洗漱完毕，耗时 <strong>${dur}</strong>，已自动记好。接下来是一段安静的看书或轻学习时间，22:45 我再喊你复盘。`
+  });
+  showToast(`已停止计时 · 自动记入「${t.label} ${dur}」`);
+  render();
+}
+
+function fastForwardLife(key, addMins) {
+  state.lifeTimers[key].seconds += addMins * 60;
+  updateLiveDigitsOnly();
+  showToast(`演示快进 +${addMins} 分钟`);
+}
+
+/* ==================== 弹出主动提醒框（模拟桌宠到点探头） ==================== */
+function openNudge(kind) {
+  const box = $("#nudgeBanner");
+  const configs = {
+    lunch: {
+      tag: "12:05 · 午间提醒",
+      title: "差不多到午饭时间啦",
+      desc: "先歇会儿去吃顿热乎的？点一下我帮你自动统计午饭耗时，不用自己记时间。",
+      primary: "▶ 去吃午饭 · 开始计时",
+      onPrimary: () => startLifeTimer("lunch"),
+      secondary: "再专注 15 分钟"
+    },
+    dinner: {
+      tag: "18:10 · 傍晚提醒",
+      title: "到晚饭点咯，准备吃饭吗？",
+      desc: "点击后开始晚饭计时，吃完回来我顺便帮你约一下今晚洗漱的闹钟。",
+      primary: "▶ 去吃晚饭 · 开始计时",
+      onPrimary: () => startLifeTimer("dinner"),
+      secondary: "晚点再吃"
+    },
+    wash: {
+      tag: `${state.lifeTimers.wash.alarmTime || "21:30"} · 洗漱闹钟响了`,
+      title: "到你约好的洗漱时间了",
+      desc: "洗澡 + 刷牙，现在去的话回来还有一段安静的看书/学习时间。",
+      primary: "▶ 去洗漱 · 开始计时",
+      onPrimary: () => startLifeTimer("wash"),
+      secondary: "推迟 15 分钟"
+    },
+    evening: {
+      tag: "22:45 · 晚间复盘",
+      title: "今天快收尾啦，花 2 分钟复盘？",
+      desc: "白天的睡眠、吃饭和洗漱耗时都自动记好了，只剩核对几个习惯和写一句明日调整。",
+      primary: "进入晚间复盘",
+      onPrimary: () => { state.view = "focus-flow"; state.stage = "evening"; box.classList.remove("open"); render(); },
+      secondary: "稍后再说"
+    }
+  };
+  const cfg = configs[kind];
+  box.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <span class="badge-blue tnum">${cfg.tag}</span>
+      <button style="font-size:11.5px;color:var(--ink-muted)" id="closeNudgeBtn">关闭</button>
+    </div>
+    <div>
+      <div style="font-size:14.5px;font-weight:600;margin-bottom:3px">${cfg.title}</div>
+      <div style="font-size:12.5px;color:var(--ink-secondary);line-height:1.5">${cfg.desc}</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn-primary" id="nudgePrimaryBtn" style="flex:1;height:34px;font-size:12.5px">${cfg.primary}</button>
+      <button class="btn-outline" id="nudgeSecBtn" style="height:34px;font-size:12px">${cfg.secondary}</button>
+    </div>
+  `;
+  box.classList.add("open");
+  $("#closeNudgeBtn").onclick = () => box.classList.remove("open");
+  $("#nudgeSecBtn").onclick = () => { box.classList.remove("open"); showToast("好哒，不打扰你，稍后再提醒"); };
+  $("#nudgePrimaryBtn").onclick = cfg.onPrimary;
+}
+
+/* ==================== 同步侧边栏 & 顶栏 & 节奏条 ==================== */
+function syncChrome() {
+  // 侧边栏导航激活态
+  $$(".nav-item[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === state.view));
+  $$("#topViewSwitch button").forEach((b) => b.classList.toggle("active", b.dataset.view === state.view));
+
+  const curStageObj = STAGES.find((s) => s.id === state.stage);
+  $("#sideStageTag").textContent = curStageObj.short;
+
+  // 计算自动记好的条目数
+  const morningFilled = Object.values(state.morningAnswers).filter(Boolean).length;
+  const lifeDone = Object.values(state.lifeTimers).filter((t) => t.status === "done").length;
+  const tasksDone = state.tasks.filter((t) => t.done).length;
+  const totalAuto = morningFilled + lifeDone + state.pomo.completedCount + tasksDone;
+  $("#sideRecordCount").textContent = `${totalAuto} 条`;
+
+  const pct = Math.min(100, Math.round(((morningFilled + lifeDone * 2 + state.pomo.completedCount + tasksDone + (state.nextAdjustment ? 2 : 0)) / 14) * 100));
+  $("#sidePct").textContent = `${pct}%`;
+  $("#sideBar").style.width = `${pct}%`;
+  $("#sideSummaryText").innerHTML = `${state.pomo.completedCount} 番茄 <span>· ${lifeDone} 生活计时</span>`;
+
+  // 侧栏「随时一键计时」区
+  $("#quickLifeBox").innerHTML = ["lunch", "dinner", "wash"].map((k) => {
+    const t = state.lifeTimers[k];
+    const isRun = t.status === "running";
+    const meta = isRun
+      ? `<small id="sideLife-${k}" class="tnum">${fmtHMS(t.seconds)}</small>`
+      : (t.status === "done"
+        ? `<small class="tnum">已记 ${fmtDurationText(t.seconds)}</small>`
+        : `<small>${k === "wash" && t.alarmTime ? `闹钟 ${t.alarmTime}` : "点击计时"}</small>`);
+    return `
+      <button class="life-trigger ${isRun ? "running" : ""}" data-life-quick="${k}">
+        <span style="display:flex;align-items:center;gap:7px">
+          ${isRun ? `<span class="pulse-dot"></span>` : `<span style="width:6px;height:6px;border-radius:50%;background:${t.status === "done" ? "var(--blue-primary)" : "var(--border-strong)"}"></span>`}
+          ${t.label.replace("（洗澡+刷牙）", "")}
+        </span>
+        ${meta}
+      </button>
+    `;
+  }).join("");
+
+  $$("[data-life-quick]").forEach((btn) => btn.addEventListener("click", () => {
+    const k = btn.dataset.lifeQuick;
+    if (state.lifeTimers[k].status === "running") {
+      state.view = "focus-flow";
+      state.stage = k === "lunch" ? "lunch" : "dinner";
+      render();
+    } else if (state.lifeTimers[k].status === "idle") {
+      startLifeTimer(k);
+    } else {
+      state.view = "focus-flow";
+      state.stage = k === "lunch" ? "lunch" : "dinner";
+      render();
+    }
+  }));
+
+  // 顶栏文案 & 节奏条显隐
+  $("#rhythmBar").classList.toggle("hidden", state.view !== "focus-flow");
+  if (state.view === "focus-flow") {
+    $("#pageTitle").textContent = curStageObj.label;
+    $("#pageSub").textContent = curStageObj.sub;
+    const morningAllDone = Object.values(state.morningAnswers).every(Boolean);
+    $("#rhythmSteps").innerHTML = STAGES.map((st, idx) => {
+      const isDone = (st.id === "morning" && morningAllDone)
+        || (st.id === "lunch" && state.lifeTimers.lunch.status === "done")
+        || (st.id === "dinner" && state.lifeTimers.dinner.status === "done" && state.lifeTimers.wash.status === "done")
+        || (st.id === "evening" && state.nextAdjustment.trim());
+      return `
+        ${idx > 0 ? `<span class="step-arrow">›</span>` : ""}
+        <button class="step-pill ${state.stage === st.id ? "active" : ""} ${isDone ? "done-step" : ""}" data-stage="${st.id}">
+          <span class="step-num tnum">${isDone && state.stage !== st.id ? "✓" : st.num}</span>
+          ${st.short}
+        </button>
+      `;
+    }).join("");
+    $$("[data-stage]").forEach((b) => b.addEventListener("click", () => {
+      state.stage = b.dataset.stage;
+      render();
+    }));
+  } else if (state.view === "full-day") {
+    $("#pageTitle").textContent = "今日全清单";
+    $("#pageSub").textContent = "所有信号、耗时计时、习惯与任务都在这里，随时查看或补改";
+  } else {
+    $("#pageTitle").textContent = "本周事实汇总";
+    $("#pageSub").textContent = "纯事实分布与调整回看 · 零 AI 说教、不另开第二条调整";
+  }
+}
+
+/* ==================== 渲染主画布：此刻焦点（5 阶段逐一纯净聚焦） ==================== */
+function renderFocusFlow() {
+  let leftHtml = "";
+  if (state.stage === "morning") leftHtml = renderStageMorning();
+  else if (state.stage === "work") leftHtml = renderStageWork();
+  else if (state.stage === "lunch") leftHtml = renderStageLunch();
+  else if (state.stage === "dinner") leftHtml = renderStageDinnerWash();
+  else if (state.stage === "evening") leftHtml = renderStageEvening();
+
+  const rightHtml = renderRightCompanion();
+
+  $("#mainScroll").innerHTML = `
+    <div class="stage-grid">
+      <div class="col-stack">${leftHtml}</div>
+      <div class="col-stack">${rightHtml}</div>
+    </div>
+  `;
+  bindStageEvents();
+}
+
+/* ---------- 阶段 1：早间启动与今日规划 ---------- */
+function renderStageMorning() {
+  const answeredCount = Object.values(state.morningAnswers).filter(Boolean).length;
+  const allAnswered = answeredCount === MORNING_QUESTIONS.length;
+  const qItem = MORNING_QUESTIONS[Math.min(state.morningStep, MORNING_QUESTIONS.length - 1)];
+
+  return `
+    <!-- 置顶轻条：昨日那一条调整 -->
+    <div class="adj-slim">
+      <div class="adj-slim-left">
+        <span class="badge-blue">昨日调整</span>
+        <span>${state.prevAdjustment.text}</span>
+      </div>
+      <button class="btn-outline" style="height:26px;font-size:11.5px;padding:0 9px" id="toggleAdjSlim">
+        ${state.prevAdjustment.status === "done" ? "✓ 已践行" : "标为已践行"}
+      </button>
+    </div>
+
+    <!-- 焦点 1：晨间快问快答（一次只出 1 题，点一下立刻切下一题，零表单疲劳） -->
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">晨间 5 问 · 轻启动</div>
+          <div class="card-sub">点一个选项自动记进今日信号与习惯，也可以直接跳过</div>
+        </div>
+        <span class="badge-blue tnum">${answeredCount} / ${MORNING_QUESTIONS.length}</span>
+      </div>
+
+      ${!allAnswered ? `
+        <div class="morning-q-box">
+          <div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink-muted)">
+            <span>第 ${state.morningStep + 1} 题</span>
+            <button style="color:var(--ink-muted);text-decoration:underline" id="skipMorningQ">先跳过这题</button>
+          </div>
+          <div class="morning-q-title">${qItem.q}</div>
+          <div class="choice-row">
+            ${qItem.chips.map((c) => `<button class="choice-chip" data-mq-key="${qItem.key}" data-mq-val="${c}">${c}</button>`).join("")}
+          </div>
+          <form id="morningCustomForm" style="display:flex;gap:8px;margin-top:2px">
+            <input class="text-input" id="morningCustomInput" style="height:34px" placeholder="或者直接打一句话回答…" />
+            <button class="btn-primary" type="submit" style="height:34px">记下</button>
+          </form>
+        </div>
+      ` : `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-radius:10px;background:var(--blue-tint);border:1px solid var(--blue-light)">
+          <div style="font-size:13px;font-weight:500;color:var(--blue-primary)">✓ 晨间记录已全部入账，直接看下面排一下今天的任务吧！</div>
+          <button class="btn-outline" style="height:26px;font-size:11.5px" id="resetMorningBtn">重改</button>
+        </div>
+      `}
+
+      ${answeredCount > 0 ? `
+        <div class="morning-summary-bar" style="margin-top:12px">
+          ${state.morningAnswers.sleep ? `<span class="fact-chip"><strong>睡眠</strong>${state.morningAnswers.sleep}</span>` : ""}
+          ${state.morningAnswers.wakeTime ? `<span class="fact-chip"><strong>起床</strong>${state.morningAnswers.wakeTime}</span>` : ""}
+          ${state.morningAnswers.breakfast ? `<span class="fact-chip"><strong>早餐</strong>${state.morningAnswers.breakfast}</span>` : ""}
+          ${state.morningAnswers.sunlight ? `<span class="fact-chip"><strong>晒太阳</strong>${state.morningAnswers.sunlight}</span>` : ""}
+          ${state.morningAnswers.vocab ? `<span class="fact-chip"><strong>背单词</strong>${state.morningAnswers.vocab}</span>` : ""}
+        </div>
+      ` : ""}
+    </section>
+
+    <!-- 焦点 2：昨日交接 + 今日任务规划 -->
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">今日任务规划</div>
+          <div class="card-sub">左边清点昨天留下的事，右边排好今天要专注的任务</div>
+        </div>
+        <button class="btn-primary" id="goWorkStageBtn" style="height:32px;font-size:12.5px">规划好了，开始专注 →</button>
+      </div>
+
+      <div class="plan-split">
+        <!-- 昨日交接 -->
+        <div class="sub-panel muted-bg">
+          <div style="font-size:12px;font-weight:600;color:var(--ink-secondary)">昨天未完成（${state.yesterdayCarryOver.filter((x) => !x.moved).length}）</div>
+          ${state.yesterdayCarryOver.map((y) => `
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;${y.moved ? "opacity:0.45" : ""}">
+              <span style="font-size:12.5px">${y.title}</span>
+              <button class="btn-outline" style="height:24px;padding:0 8px;font-size:11px;flex-shrink:0" data-carry-id="${y.id}" ${y.moved ? "disabled" : ""}>
+                ${y.moved ? "已移入" : "→ 移到今天"}
+              </button>
+            </div>
+          `).join("")}
+
+          <div style="margin-top:6px;padding-top:10px;border-top:1px solid var(--border)">
+            <div style="font-size:11.5px;color:var(--ink-muted);margin-bottom:6px">昨天已完成（${state.yesterdayDone.length}）</div>
+            ${state.yesterdayDone.map((d) => `<div style="font-size:12px;color:var(--ink-secondary);padding:2px 0">✓ ${d}</div>`).join("")}
+          </div>
+        </div>
+
+        <!-- 今日任务规划 -->
+        <div class="sub-panel">
+          <div style="font-size:12px;font-weight:600;color:var(--ink-primary)">今天要做的事（${state.tasks.filter((t) => !t.done).length} 项待办）</div>
+          <form id="planAddTaskForm" style="display:flex;gap:6px">
+            <input class="text-input" id="planAddTaskInput" style="height:32px;font-size:12.5px" placeholder="加一条今天的任务，回车添加…" />
+            <button class="btn-outline" type="submit" style="height:32px">添加</button>
+          </form>
+          <div>
+            ${state.tasks.map((t) => `
+              <div class="task-row ${t.done ? "done" : ""} ${state.activeTaskId === t.id && !t.done ? "focus-target" : ""}">
+                <div style="display:flex;align-items:center;gap:9px;cursor:pointer;flex:1" data-toggle-task="${t.id}">
+                  <span class="black-box ${t.done ? "checked" : ""}">
+                    ${t.done ? `<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m3 8.5 3.2 3.2L13 4.8"/></svg>` : ""}
+                  </span>
+                  <span class="task-text" style="font-size:13px">${t.title}</span>
+                </div>
+                ${!t.done ? `<button class="btn-outline" style="height:24px;padding:0 8px;font-size:11px" data-pick-focus="${t.id}">${state.activeTaskId === t.id ? "首项专注" : "设首项"}</button>` : ""}
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+/* ---------- 阶段 2：专注推进（极简清爽：只看当前任务 + 番茄钟） ---------- */
+function renderStageWork() {
+  const activeTask = state.tasks.find((t) => t.id === state.activeTaskId && !t.done) || state.tasks.find((t) => !t.done);
+  const openTasks = state.tasks.filter((t) => !t.done);
+  const doneTasks = state.tasks.filter((t) => t.done);
+  const total = state.pomo.phase === "focus" ? 25 * 60 : 5 * 60;
+  const r = 88;
+  const c = 2 * Math.PI * r;
+  const ratio = state.pomo.remaining / total;
+
+  return `
+    <!-- 唯一主视觉：专注计时主卡 -->
+    <section class="card hero-timer-card ${state.pomo.running ? "active-blue" : ""}">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="badge-blue">${state.pomo.phase === "focus" ? "25 分钟专注单元" : "5 分钟休息"}</span>
+        <span class="badge-gray tnum">今日已完成 ${state.pomo.completedCount} 个番茄</span>
+      </div>
+
+      <div style="font-size:17px;font-weight:600;max-width:480px">
+        ${activeTask ? activeTask.title : "今天规划的任务已经全部完成！"}
+      </div>
+
+      <div class="ring-box">
+        <svg width="204" height="204" viewBox="0 0 204 204">
+          <circle cx="102" cy="102" r="${r}" fill="none" stroke="var(--bg-track)" stroke-width="6"/>
+          <circle cx="102" cy="102" r="${r}" fill="none" stroke="var(--blue-primary)" stroke-width="6" stroke-linecap="round"
+            stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - ratio)}"/>
+        </svg>
+        <div class="ring-center">
+          <div class="ring-digits tnum" id="livePomoDigits">${fmtHMS(state.pomo.remaining)}</div>
+          <div class="ring-sub">${state.pomo.running ? (state.pomo.phase === "focus" ? "专注中 · 其余信息已静默" : "休息一下，看看远处") : "准备就绪"}</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+        <button class="btn-primary" id="pomoStartPauseBtn" style="min-width:136px">
+          ${state.pomo.running ? "暂停计时" : (state.pomo.phase === "focus" ? "开始 25m 专注" : "开始 5m 休息")}
+        </button>
+        <button class="btn-outline" id="pomoFinishDemoBtn" style="height:36px">模拟完成本轮 (+1 番茄)</button>
+        <button class="btn-outline" id="pomoSwitchPhaseBtn" style="height:36px">${state.pomo.phase === "focus" ? "切到 5m 休息" : "切回 25m 专注"}</button>
+      </div>
+
+      <!-- 极低摩擦的离座快捷条 -->
+      <div style="margin-top:6px;padding-top:14px;border-top:1px solid var(--border);width:100%;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <span style="font-size:12px;color:var(--ink-muted)">需要临时离开座位？一键自动记耗时：</span>
+        <div style="display:flex;gap:6px">
+          <button class="btn-outline" style="height:28px;font-size:12px" data-quick-start-life="lunch">▶ 去吃午饭</button>
+          <button class="btn-outline" style="height:28px;font-size:12px" data-quick-start-life="dinner">▶ 去吃晚饭</button>
+          <button class="btn-outline" style="height:28px;font-size:12px" data-quick-start-life="wash">▶ 去洗漱</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 精简待办队列（只显示待办，已完成折叠） -->
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">今日待办队列</div>
+          <div class="card-sub">点击任务即可切换为上方正在专注的对象</div>
+        </div>
+        <span class="badge-gray tnum">${doneTasks.length} 项已完成</span>
+      </div>
+      <div>
+        ${openTasks.length ? openTasks.map((t) => `
+          <div class="task-row ${activeTask && activeTask.id === t.id ? "focus-target" : ""}">
+            <div style="display:flex;align-items:center;gap:10px;flex:1;cursor:pointer" data-toggle-task="${t.id}">
+              <span class="black-box"></span>
+              <span style="font-size:13.5px;font-weight:${activeTask && activeTask.id === t.id ? "600" : "400"}">${t.title}</span>
+              <span class="badge-gray" style="font-size:10.5px">${t.tag}</span>
+            </div>
+            ${activeTask && activeTask.id === t.id
+              ? `<span class="badge-blue">正在专注</span>`
+              : `<button class="btn-outline" style="height:26px;font-size:11.5px;padding:0 9px" data-pick-focus="${t.id}">切换专注</button>`}
+          </div>
+        `).join("") : `<div style="font-size:13px;color:var(--ink-muted);padding:8px 0">待办都清空啦！可以随时补充新任务或去休息。</div>`}
+      </div>
+    </section>
+  `;
+}
+
+/* ---------- 阶段 3：午间吃饭计时 + 上午微复盘 + 下午衔接 ---------- */
+function renderStageLunch() {
+  const lt = state.lifeTimers.lunch;
+  const doneTasks = state.tasks.filter((t) => t.done);
+  const openTasks = state.tasks.filter((t) => !t.done);
+
+  if (lt.status === "idle") {
+    return `
+      <section class="card hero-timer-card">
+        <span class="badge-blue">午间切换 · 自动记耗时</span>
+        <div style="font-size:18px;font-weight:600">差不多到午饭时间了，准备去吃饭吗？</div>
+        <p style="font-size:13px;color:var(--ink-secondary);max-width:440px">
+          点下方按钮开始计时，吃完回到电脑前点停止。灵儿会自动记下你今天吃午饭花了多久，顺带帮你承接下午的任务。
+        </p>
+        <div style="display:flex;gap:10px;margin-top:4px">
+          <button class="btn-primary" data-quick-start-life="lunch" style="min-width:180px">▶ 去吃午饭 · 开始计时</button>
+          <button class="btn-outline" style="height:36px" data-stage-go="work">晚点再吃，先回去专注</button>
+        </div>
+      </section>
+    `;
+  }
+
+  if (lt.status === "running") {
+    return `
+      <section class="card hero-timer-card active-blue">
+        <div style="display:flex;align-items:center;gap:8px;color:var(--blue-primary);font-size:13px;font-weight:600">
+          <span class="pulse-dot"></span> 正在吃午饭 · 耗时统计中
+        </div>
+        <div class="stopwatch-digits tnum" id="liveLifeDigits">${fmtHMS(lt.seconds)}</div>
+        <p style="font-size:12.5px;color:var(--ink-secondary)">好好吃饭，别看工作消息。回到电脑前再点下面停止计时。</p>
+        <div style="display:flex;gap:10px;margin-top:6px">
+          <button class="btn-primary" data-stop-life="lunch" style="min-width:170px">■ 吃完了 · 停止计时</button>
+          <button class="btn-outline" style="height:36px" data-ff-life="lunch">演示快进 +25m</button>
+        </div>
+      </section>
+    `;
+  }
+
+  // lt.status === "done"：午间承上启下微复盘
+  return `
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">午饭已自动记账 · <span style="color:var(--blue-primary)" class="tnum">${fmtDurationText(lt.seconds)}</span></div>
+          <div class="card-sub">花 10 秒顺手记一下吃了什么 + 上午学了点啥，然后直接开下午的工</div>
+        </div>
+        <span class="badge-blue">✓ 耗时已写入信号</span>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <!-- 1. 顺手记午饭内容 -->
+        <div>
+          <div style="font-size:12.5px;font-weight:600;margin-bottom:7px">午饭吃了什么？（可选）</div>
+          <div class="choice-row" style="margin-bottom:8px">
+            ${["牛肉面", "轻食沙拉", "盖浇饭", "自制家常菜"].map((f) => `
+              <button class="choice-chip ${lt.food === f ? "selected" : ""}" data-lunch-food="${f}" style="padding:5px 11px;font-size:12.5px">${f}</button>
+            `).join("")}
+          </div>
+          <input class="text-input" id="lunchFoodInput" value="${lt.food}" placeholder="或者打几个字，如：番茄炒蛋盖饭…" />
+        </div>
+
+        <!-- 2. 上午成果 + 一句微复盘 -->
+        <div class="sub-panel muted-bg">
+          <div style="font-size:12.5px;font-weight:600">上午进度回看</div>
+          <div style="font-size:12.5px;color:var(--ink-secondary)">
+            已完成 <strong>${doneTasks.length}</strong> 项任务 · 累计 <strong>${state.pomo.completedCount}</strong> 个番茄钟
+            ${doneTasks.length ? `（${doneTasks.map((t) => t.title).join("、")}）` : ""}
+          </div>
+          <div style="font-size:12.5px;font-weight:600;margin-top:4px">上午学了哪些知识？现在印象怎么样？</div>
+          <div class="choice-row">
+            ${["很清晰，能讲出来", "大概懂了，下午再练一下", "有点模糊，需要回看", "上午主要是事务执行"].map((feel) => `
+              <button class="choice-chip ${lt.reviewFeeling === feel ? "selected" : ""}" data-lunch-feel="${feel}" style="padding:5px 10px;font-size:12px">${feel}</button>
+            `).join("")}
+          </div>
+          <input class="text-input" id="lunchReviewInput" value="${lt.reviewNote}" placeholder="顺手记一个关键词/知识点（可留空不填）…" />
+        </div>
+
+        <!-- 3. 下午待办承接 -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:6px">
+          <div style="font-size:12.5px;color:var(--ink-secondary)">下午还有 <strong>${openTasks.length}</strong> 项未完成任务</div>
+          <button class="btn-primary" id="startAfternoonBtn">保存并开始下午专注 →</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+/* ---------- 阶段 4：傍晚晚饭计时 + 洗漱闹钟预约 + 洗漱计时 ---------- */
+function renderStageDinnerWash() {
+  const dt = state.lifeTimers.dinner;
+  const wt = state.lifeTimers.wash;
+
+  // 若正在洗漱计时，全屏聚焦洗漱计时器
+  if (wt.status === "running") {
+    return `
+      <section class="card hero-timer-card active-blue">
+        <div style="display:flex;align-items:center;gap:8px;color:var(--blue-primary);font-size:13px;font-weight:600">
+          <span class="pulse-dot"></span> 正在洗漱（洗澡 + 刷牙）· 计时中
+        </div>
+        <div class="stopwatch-digits tnum" id="liveLifeDigits">${fmtHMS(wt.seconds)}</div>
+        <p style="font-size:12.5px;color:var(--ink-secondary)">舒舒服服洗个热水澡。回来点停止计时，自动进入安静的睡前看书/学习时光。</p>
+        <div style="display:flex;gap:10px;margin-top:6px">
+          <button class="btn-primary" data-stop-life="wash" style="min-width:170px">■ 洗漱完毕 · 停止计时</button>
+          <button class="btn-outline" style="height:36px" data-ff-life="wash">演示快进 +18m</button>
+        </div>
+      </section>
+    `;
+  }
+
+  // 若正在吃晚饭计时，聚焦晚饭计时器
+  if (dt.status === "running") {
+    return `
+      <section class="card hero-timer-card active-blue">
+        <div style="display:flex;align-items:center;gap:8px;color:var(--blue-primary);font-size:13px;font-weight:600">
+          <span class="pulse-dot"></span> 正在吃晚饭 · 耗时统计中
+        </div>
+        <div class="stopwatch-digits tnum" id="liveLifeDigits">${fmtHMS(dt.seconds)}</div>
+        <p style="font-size:12.5px;color:var(--ink-secondary)">吃完回来点停止，顺便定一下今晚洗漱的闹钟。</p>
+        <div style="display:flex;gap:10px;margin-top:6px">
+          <button class="btn-primary" data-stop-life="dinner" style="min-width:170px">■ 吃完了 · 停止计时</button>
+          <button class="btn-outline" style="height:36px" data-ff-life="dinner">演示快进 +28m</button>
+        </div>
+      </section>
+    `;
+  }
+
+  return `
+    <!-- 卡 1：晚饭状态 -->
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">晚饭记录 ${dt.status === "done" ? `· <span style="color:var(--blue-primary)" class="tnum">${fmtDurationText(dt.seconds)}</span>` : ""}</div>
+          <div class="card-sub">${dt.status === "done" ? "晚饭耗时已自动入账" : "大概 18:00 左右提醒，也可以随时手动开始"}</div>
+        </div>
+        ${dt.status === "done"
+          ? `<span class="badge-blue">✓ 已记录</span>`
+          : `<button class="btn-primary" data-quick-start-life="dinner" style="height:32px;font-size:12.5px">▶ 去吃晚饭 · 开始计时</button>`}
+      </div>
+      ${dt.status === "done" ? `
+        <input class="text-input" id="dinnerFoodInput" value="${dt.food}" placeholder="顺手记一句晚饭吃了什么（可选）…" />
+      ` : ""}
+    </section>
+
+    <!-- 卡 2：动态预约今晚洗漱闹钟 + 洗漱计时 -->
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">今晚洗漱计划（洗澡 + 刷牙）</div>
+          <div class="card-sub">${wt.status === "done" ? `洗漱已完成，耗时 ${fmtDurationText(wt.seconds)} · 接下来是睡前看书/学习时光` : "点一个今晚打算去洗漱的时间，灵儿帮你定闹钟，到点一键计时"}</div>
+        </div>
+        ${wt.alarmTime && wt.status !== "done" ? `<span class="badge-blue tnum">闹钟 ${wt.alarmTime}</span>` : ""}
+      </div>
+
+      ${wt.status === "done" ? `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-radius:10px;background:var(--blue-tint);border:1px solid var(--blue-light)">
+          <span style="font-size:13px;font-weight:500;color:var(--blue-primary)">✓ 洗漱耗时 ${fmtDurationText(wt.seconds)} 已自动记入今日信号</span>
+          <button class="btn-primary" style="height:30px;font-size:12px" data-stage-go="work">回到安静看书/专注 →</button>
+        </div>
+      ` : `
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div class="choice-row">
+            ${["20:30", "21:00", "21:30", "22:00"].map((tm) => `
+              <button class="choice-chip tnum ${wt.alarmTime === tm ? "selected" : ""}" data-set-wash-alarm="${tm}">定在 ${tm}</button>
+            `).join("")}
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn-primary" data-quick-start-life="wash">▶ 现在就去洗漱 · 开始计时</button>
+            ${wt.alarmTime ? `<button class="btn-outline" style="height:36px" data-sim-nudge="wash">模拟 ${wt.alarmTime} 闹钟响起</button>` : ""}
+          </div>
+        </div>
+      `}
+    </section>
+  `;
+}
+
+/* ---------- 阶段 5：晚间复盘（22:30–23:00，自动汇总白天账单 + 极速收口） ---------- */
+function renderStageEvening() {
+  const pendingHabits = state.habits.filter((h) => h.status === "pending");
+  return `
+    <!-- 左上：白天已经自动记好的「今日时间账单」（零手动回忆负担！） -->
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">今日已自动归档</div>
+          <div class="card-sub">白天随手点过的，晚上不用重新回忆和填写</div>
+        </div>
+        <span class="badge-blue">已省去 80% 记录工作</span>
+      </div>
+      <div class="morning-summary-bar">
+        <span class="fact-chip"><strong>睡眠</strong>${state.morningAnswers.sleep || "未记"}</span>
+        <span class="fact-chip"><strong>起床</strong>${state.morningAnswers.wakeTime || "未记"}</span>
+        <span class="fact-chip"><strong>番茄钟</strong>${state.pomo.completedCount} 个</span>
+        <span class="fact-chip"><strong>午饭</strong>${state.lifeTimers.lunch.status === "done" ? fmtDurationText(state.lifeTimers.lunch.seconds) + (state.lifeTimers.lunch.food ? " · " + state.lifeTimers.lunch.food : "") : "待确认"}</span>
+        <span class="fact-chip"><strong>晚饭</strong>${state.lifeTimers.dinner.status === "done" ? fmtDurationText(state.lifeTimers.dinner.seconds) : "待确认"}</span>
+        <span class="fact-chip"><strong>洗漱</strong>${state.lifeTimers.wash.status === "done" ? fmtDurationText(state.lifeTimers.wash.seconds) : "待确认"}</span>
+        <span class="fact-chip"><strong>完成任务</strong>${state.tasks.filter((t) => t.done).length} / ${state.tasks.length}</span>
+      </div>
+    </section>
+
+    <!-- 剩余习惯极速点完 -->
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">清点今日习惯</div>
+          <div class="card-sub">只剩 ${pendingHabits.length} 项待核对，轻轻一点就好</div>
+        </div>
+      </div>
+      ${state.habits.map((h) => `
+        <div class="task-row">
+          <div>
+            <span style="font-size:13.5px;font-weight:500">${h.title}</span>
+            <span class="badge-gray" style="margin-left:6px;font-size:10.5px">${h.cat}</span>
+          </div>
+          <div class="tri-switch">
+            <button class="${h.status === "done" ? "s-done" : ""}" data-habit-id="${h.id}" data-habit-val="done">完成</button>
+            <button class="${h.status === "partial" ? "s-partial" : ""}" data-habit-id="${h.id}" data-habit-val="partial">部分</button>
+            <button class="${h.status === "missed" ? "s-missed" : ""}" data-habit-id="${h.id}" data-habit-val="missed">未做</button>
+          </div>
+        </div>
+      `).join("")}
+    </section>
+
+    <!-- 两句话收口 + 顺手排明天 -->
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">晚间收口 · 准备明天</div>
+          <div class="card-sub">写两句话结束今天，再顺手给明天留 1-2 件要做的事</div>
+        </div>
+        <span class="badge-blue">${state.output.trim() && state.nextAdjustment.trim() ? "✓ 今日闭环" : "收口中"}</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <input class="text-input" id="eveningOutputInput" value="${state.output}" placeholder="今日输出：用自己的话写一句今天学到/体会到的…" />
+        <input class="text-input" id="eveningAdjInput" value="${state.nextAdjustment}" placeholder="明日调整：只规定明天要改的一件事（明早自动置顶）…" />
+        <form id="tomorrowTaskForm" style="display:flex;gap:8px">
+          <input class="text-input" id="tomorrowTaskInput" placeholder="顺手加一条明天要做的任务（回车添加）…" />
+          <button class="btn-outline" type="submit" style="height:36px">加入明日</button>
+        </form>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${state.tomorrowDrafts.map((d) => `<span class="fact-chip"><strong>明日待办</strong>${d}</span>`).join("")}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+/* ==================== 右侧极简陪伴栏（随时说话记录 + 当前闹钟） ==================== */
+function renderRightCompanion() {
+  const wt = state.lifeTimers.wash;
+  return `
+    <section class="card" style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14.5px">
+          <span style="width:18px;height:18px;display:grid;grid-template-columns:1fr 1fr;gap:2px">
+            <i style="background:var(--ink-primary);border-radius:2px"></i>
+            <i style="background:var(--blue-primary);border-radius:2px"></i>
+            <i style="background:var(--ink-primary);opacity:0.25;border-radius:2px"></i>
+            <i style="background:var(--ink-primary);border-radius:2px"></i>
+          </span>
+          灵儿对话捕捉
+        </div>
+        <span class="badge-gray">随时随口记</span>
+      </div>
+
+      <div class="chat-stream" id="chatStream">
+        ${state.chat.map((m) => m.role === "user"
+          ? `<div class="msg-user">${m.text}</div>`
+          : `<div>
+              ${m.extracted ? `<div class="extract-line"><span>✓ 已写入 · ${m.extracted}</span></div>` : ""}
+              <div class="msg-bot">${m.text}</div>
+            </div>`
+        ).join("")}
+      </div>
+
+      <form class="chat-composer" id="chatForm">
+        <input id="chatInput" placeholder="不想点按钮？直接说「午饭吃了面 / 21:30洗漱」…" />
+        <button class="send-circle" type="submit">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5m0 0-6 6m6-6 6 6"/></svg>
+        </button>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="card-head" style="margin-bottom:10px">
+        <div class="card-title">动态闹钟与下一节点</div>
+      </div>
+      ${wt.alarmTime && wt.status !== "done" ? `
+        <div class="alarm-row highlight">
+          <div>
+            <div style="font-size:13px;font-weight:600" class="tnum">${wt.alarmTime} · 洗漱闹钟</div>
+            <div style="font-size:11.5px;color:var(--ink-secondary)">洗澡 + 刷牙 · 到点弹出计时框</div>
+          </div>
+          <button class="btn-outline" style="height:26px;font-size:11.5px" data-sim-nudge="wash">模拟响铃</button>
+        </div>
+      ` : ""}
+      <div class="alarm-row">
+        <div>
+          <div style="font-size:13px;font-weight:500" class="tnum">12:00 / 18:00 · 用餐轻提醒</div>
+          <div style="font-size:11.5px;color:var(--ink-muted)">只给温和提示框，不强迫打断</div>
+        </div>
+        <span class="badge-gray">已开启</span>
+      </div>
+      <div class="alarm-row">
+        <div>
+          <div style="font-size:13px;font-weight:500" class="tnum">22:45 · 晚间复盘</div>
+          <div style="font-size:11.5px;color:var(--ink-muted)">收口习惯、输出与明日一条调整</div>
+        </div>
+        <button class="btn-outline" style="height:26px;font-size:11.5px" data-stage-go="evening">现在去</button>
+      </div>
+    </section>
+  `;
+}
+
+/* ==================== 视图 2：今日全清单（随时看全局，平时藏在幕后） ==================== */
+function renderFullDayView() {
+  const lt = state.lifeTimers;
+  $("#mainScroll").innerHTML = `
+    <section class="kpi-strip">
+      <div class="kpi-cell"><div class="kpi-label">睡眠与起床</div><div class="kpi-num tnum">${state.morningAnswers.wakeTime || "未记"}</div><div style="font-size:11.5px;color:var(--ink-muted)">${state.morningAnswers.sleep || "晨间待记录"}</div></div>
+      <div class="kpi-cell"><div class="kpi-label">番茄专注</div><div class="kpi-num tnum">${state.pomo.completedCount} 个</div><div style="font-size:11.5px;color:var(--ink-muted)">${state.pomo.completedCount * 25} 分钟</div></div>
+      <div class="kpi-cell"><div class="kpi-label">生活耗时统计</div><div class="kpi-num tnum">${[lt.lunch, lt.dinner, lt.wash].filter((x) => x.status === "done").length} / 3</div><div style="font-size:11.5px;color:var(--ink-muted)">午饭 · 晚饭 · 洗漱</div></div>
+      <div class="kpi-cell"><div class="kpi-label">任务完成</div><div class="kpi-num tnum">${state.tasks.filter((t) => t.done).length} / ${state.tasks.length}</div><div style="font-size:11.5px;color:var(--ink-muted)">昨日调整：${state.prevAdjustment.status === "done" ? "已践行" : "待践行"}</div></div>
+    </section>
+
+    <div class="stage-grid">
+      <div class="col-stack">
+        <section class="card">
+          <div class="card-head"><div class="card-title">今日信号与生活计时账单</div></div>
+          <div class="morning-summary-bar">
+            <span class="fact-chip"><strong>睡眠</strong>${state.morningAnswers.sleep || "待记录"}</span>
+            <span class="fact-chip"><strong>起床</strong>${state.morningAnswers.wakeTime || "待记录"}</span>
+            <span class="fact-chip"><strong>早餐</strong>${state.morningAnswers.breakfast || "待记录"}</span>
+            <span class="fact-chip"><strong>晒太阳</strong>${state.morningAnswers.sunlight || "待记录"}</span>
+            <span class="fact-chip"><strong>背单词</strong>${state.morningAnswers.vocab || "待记录"}</span>
+            <span class="fact-chip"><strong>午饭耗时</strong>${lt.lunch.status === "done" ? fmtDurationText(lt.lunch.seconds) : "待计时"}</span>
+            <span class="fact-chip"><strong>晚饭耗时</strong>${lt.dinner.status === "done" ? fmtDurationText(lt.dinner.seconds) : "待计时"}</span>
+            <span class="fact-chip"><strong>洗漱耗时</strong>${lt.wash.status === "done" ? fmtDurationText(lt.wash.seconds) : (lt.wash.alarmTime ? "闹钟 " + lt.wash.alarmTime : "待预约")}</span>
+          </div>
+          ${lt.lunch.reviewFeeling || lt.lunch.reviewNote ? `
+            <div style="margin-top:12px;padding:10px 12px;border-radius:9px;background:var(--bg-subtle);font-size:12.5px">
+              <strong>午间学习微复盘：</strong>${lt.lunch.reviewFeeling} ${lt.lunch.reviewNote ? "· " + lt.lunch.reviewNote : ""}
+            </div>
+          ` : ""}
+        </section>
+
+        <section class="card">
+          <div class="card-head"><div class="card-title">今日习惯（重复承诺）</div></div>
+          ${state.habits.map((h) => `
+            <div class="task-row">
+              <span>${h.title} <span class="badge-gray" style="margin-left:6px">${h.cat}</span></span>
+              <span class="${h.status === "done" ? "badge-blue" : "badge-gray"}">${h.status === "done" ? "完成" : h.status === "partial" ? "部分" : h.status === "missed" ? "未做" : "待核对"}</span>
+            </div>
+          `).join("")}
+        </section>
+      </div>
+
+      <div class="col-stack">
+        <section class="card">
+          <div class="card-head"><div class="card-title">今日任务</div></div>
+          ${state.tasks.map((t) => `<div class="task-row ${t.done ? "done" : ""}"><span class="task-text">${t.done ? "✓ " : "○ "}${t.title}</span><span class="badge-gray">${t.tag}</span></div>`).join("")}
+        </section>
+        <section class="card">
+          <div class="card-head"><div class="card-title">晚间收口</div></div>
+          <div style="font-size:13px;color:var(--ink-secondary);line-height:1.6">
+            <div><strong style="color:var(--ink-primary)">今日输出：</strong>${state.output || "晚间待写"}</div>
+            <div style="margin-top:6px"><strong style="color:var(--ink-primary)">明日调整：</strong>${state.nextAdjustment || "晚间待写"}</div>
+          </div>
+        </section>
+      </div>
+    </div>
+  `;
+}
+
+/* ==================== 视图 3：周汇总（延续白蓝黑热力矩阵 + 耗时趋势） ==================== */
+function renderSummaryView() {
+  const days = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+  const rows = [
+    { name: "早起 & 晒太阳", cells: [4,4,4,2,4,4,4] },
+    { name: "晨间背单词", cells: [4,4,2,4,4,0,4] },
+    { name: "午饭平均耗时", vals: ["24m","28m","22m","35m","25m","30m","26m"], cells: [3,3,4,1,4,2,3] },
+    { name: "洗漱平均耗时", vals: ["16m","18m","15m","22m","17m","20m","18m"], cells: [4,3,4,2,4,3,3] },
+    { name: "番茄钟个数", vals: ["5个","4个","6个","3个","5个","4个","3个"], cells: [4,3,4,2,4,3,2] }
+  ];
+  $("#mainScroll").innerHTML = `
+    <section class="kpi-strip">
+      <div class="kpi-cell"><div class="kpi-label">本周番茄总计</div><div class="kpi-num tnum">30 个</div><div style="font-size:11.5px;color:var(--blue-primary)">12h 30m 深度专注</div></div>
+      <div class="kpi-cell"><div class="kpi-label">午饭平均耗时</div><div class="kpi-num tnum">27 分钟</div><div style="font-size:11.5px;color:var(--ink-muted)">自动计时统计</div></div>
+      <div class="kpi-cell"><div class="kpi-label">洗漱平均耗时</div><div class="kpi-num tnum">18 分钟</div><div style="font-size:11.5px;color:var(--ink-muted)">均在 22:00 前完成</div></div>
+      <div class="kpi-cell"><div class="kpi-label">调整践行天数</div><div class="kpi-num tnum">5 / 7 天</div><div style="font-size:11.5px;color:var(--ink-muted)">纯事实汇总，无 AI 建议</div></div>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <div><div class="card-title">本周节奏与耗时热力矩阵</div><div class="card-sub">用餐与洗漱耗时也自然沉淀为「信号」事实</div></div>
+      </div>
+      <div class="matrix-grid" style="grid-template-columns:116px repeat(7, 1fr)">
+        <div></div>
+        ${days.map((d) => `<div style="text-align:center;font-size:12px;color:var(--ink-muted);padding-bottom:4px">${d}</div>`).join("")}
+        ${rows.map((r) => `
+          <div style="font-size:12.5px;font-weight:500;color:var(--ink-secondary)">${r.name}</div>
+          ${r.cells.map((lvl, i) => `<div class="m-cell l${lvl} tnum">${r.vals ? r.vals[i] : (lvl === 4 ? "✓" : "")}</div>`).join("")}
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+/* ==================== 阶段事件绑定 ==================== */
+function bindStageEvents() {
+  $("#toggleAdjSlim")?.addEventListener("click", () => {
+    state.prevAdjustment.status = state.prevAdjustment.status === "done" ? "pending" : "done";
+    render();
+  });
+
+  // 早间问答
+  $$("[data-mq-key]").forEach((btn) => btn.addEventListener("click", () => {
+    answerMorning(btn.dataset.mqKey, btn.dataset.mqVal);
+  }));
+  $("#morningCustomForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const val = $("#morningCustomInput").value.trim();
+    if (!val) return;
+    const q = MORNING_QUESTIONS[state.morningStep];
+    answerMorning(q.key, val);
+  });
+  $("#skipMorningQ")?.addEventListener("click", () => {
+    state.morningStep = (state.morningStep + 1) % MORNING_QUESTIONS.length;
+    render();
+  });
+  $("#resetMorningBtn")?.addEventListener("click", () => {
+    Object.keys(state.morningAnswers).forEach((k) => state.morningAnswers[k] = null);
+    state.morningStep = 0;
+    render();
+  });
+
+  // 昨日顺延任务
+  $$("[data-carry-id]").forEach((btn) => btn.addEventListener("click", () => {
+    const item = state.yesterdayCarryOver.find((x) => x.id === btn.dataset.carryId);
+    if (!item || item.moved) return;
+    item.moved = true;
+    state.tasks.unshift({ id: "t" + Date.now(), title: item.title, tag: "昨日顺延", important: true, done: false });
+    showToast("已一键顺延到今日任务");
+    render();
+  }));
+
+  // 规划添加任务
+  $("#planAddTaskForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const val = $("#planAddTaskInput").value.trim();
+    if (!val) return;
+    state.tasks.unshift({ id: "t" + Date.now(), title: val, tag: "今日新增", important: false, done: false });
+    render();
+  });
+
+  $("#goWorkStageBtn")?.addEventListener("click", () => {
+    state.stage = "work";
+    showToast("进入专注推进 · 其余无关模块已收起");
+    render();
+  });
+
+  // 通用任务勾选 & 切换专注对象
+  $$("[data-toggle-task]").forEach((el) => el.addEventListener("click", () => {
+    const t = state.tasks.find((x) => x.id === el.dataset.toggleTask);
+    if (t) {
+      t.done = !t.done;
+      if (t.done) showToast(`✓ 完成任务：${t.title}`);
+      render();
+    }
+  }));
+  $$("[data-pick-focus]").forEach((btn) => btn.addEventListener("click", () => {
+    state.activeTaskId = btn.dataset.pickFocus;
+    render();
+  }));
+
+  // 番茄钟操作
+  $("#pomoStartPauseBtn")?.addEventListener("click", () => {
+    state.pomo.running = !state.pomo.running;
+    if (state.pomo.running) ensureTicker();
+    render();
+  });
+  $("#pomoSwitchPhaseBtn")?.addEventListener("click", () => {
+    state.pomo.phase = state.pomo.phase === "focus" ? "break" : "focus";
+    state.pomo.remaining = state.pomo.phase === "focus" ? 25 * 60 : 5 * 60;
+    state.pomo.running = false;
+    render();
+  });
+  $("#pomoFinishDemoBtn")?.addEventListener("click", () => {
+    state.pomo.completedCount += 1;
+    state.pomo.running = false;
+    state.pomo.phase = "break";
+    state.pomo.remaining = 5 * 60;
+    const t = state.tasks.find((x) => x.id === state.activeTaskId);
+    state.chat.push({
+      role: "bot",
+      extracted: `信号 · 番茄钟 (+1，今日共 ${state.pomo.completedCount} 个)`,
+      text: `漂亮！完成一轮 25 分钟专注${t ? `（${t.title}）` : ""}，先休息 5 分钟喝口水吧。`
+    });
+    showToast("已完成 1 轮番茄 · 自动切换至 5 分钟休息");
+    render();
+  });
+
+  // 生活计时按钮
+  $$("[data-quick-start-life]").forEach((b) => b.addEventListener("click", () => startLifeTimer(b.dataset.quickStartLife)));
+  $$("[data-stop-life]").forEach((b) => b.addEventListener("click", () => stopLifeTimer(b.dataset.stopLife)));
+  $$("[data-ff-life]").forEach((b) => b.addEventListener("click", () => fastForwardLife(b.dataset.ffLife, b.dataset.ffLife === "wash" ? 18 : 26)));
+
+  // 午间复盘
+  $$("[data-lunch-food]").forEach((b) => b.addEventListener("click", () => {
+    state.lifeTimers.lunch.food = b.dataset.lunchFood;
+    render();
+  }));
+  $("#lunchFoodInput")?.addEventListener("input", (e) => { state.lifeTimers.lunch.food = e.target.value; });
+  $$("[data-lunch-feel]").forEach((b) => b.addEventListener("click", () => {
+    state.lifeTimers.lunch.reviewFeeling = b.dataset.lunchFeel;
+    render();
+  }));
+  $("#lunchReviewInput")?.addEventListener("input", (e) => { state.lifeTimers.lunch.reviewNote = e.target.value; });
+  $("#startAfternoonBtn")?.addEventListener("click", () => {
+    state.stage = "work";
+    showToast("午间记录已保存 · 丝滑进入下午专注");
+    render();
+  });
+
+  // 晚饭 & 洗漱闹钟
+  $("#dinnerFoodInput")?.addEventListener("input", (e) => { state.lifeTimers.dinner.food = e.target.value; });
+  $$("[data-set-wash-alarm]").forEach((b) => b.addEventListener("click", () => {
+    state.lifeTimers.wash.alarmTime = b.dataset.setWashAlarm;
+    state.chat.push({
+      role: "bot",
+      extracted: `动态闹钟 · ${b.dataset.setWashAlarm} 洗漱提醒`,
+      text: `好哒，我帮你定好了 <strong>${b.dataset.setWashAlarm}</strong> 的洗漱闹钟，到点我弹提醒框喊你去洗澡刷牙。`
+    });
+    showToast(`已设定 ${b.dataset.setWashAlarm} 洗漱闹钟`);
+    render();
+  }));
+
+  // 晚间习惯与收口
+  $$("[data-habit-id]").forEach((b) => b.addEventListener("click", () => {
+    const h = state.habits.find((x) => x.id === b.dataset.habitId);
+    if (h) { h.status = b.dataset.habitVal; render(); }
+  }));
+  $("#eveningOutputInput")?.addEventListener("change", (e) => { state.output = e.target.value; render(); });
+  $("#eveningAdjInput")?.addEventListener("change", (e) => { state.nextAdjustment = e.target.value; render(); });
+  $("#tomorrowTaskForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const v = $("#tomorrowTaskInput").value.trim();
+    if (!v) return;
+    state.tomorrowDrafts.push(v);
+    showToast("已加入明日任务草稿");
+    render();
+  });
+
+  // 通用阶段跳转与提醒模拟
+  $$("[data-stage-go]").forEach((b) => b.addEventListener("click", () => { state.stage = b.dataset.stageGo; render(); }));
+  $$("[data-sim-nudge]").forEach((b) => b.addEventListener("click", () => openNudge(b.dataset.simNudge)));
+
+  // 右侧对话捕捉
+  $("#chatForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const input = $("#chatInput");
+    const txt = input.value.trim();
+    if (!txt) return;
+    state.chat.push({ role: "user", text: txt });
+
+    const washTimeMatch = txt.match(/(\d{1,2}:\d{2})/);
+    if (/洗漱|洗澡/.test(txt) && washTimeMatch) {
+      state.lifeTimers.wash.alarmTime = washTimeMatch[1];
+      state.chat.push({ role: "bot", extracted: `洗漱闹钟 (${washTimeMatch[1]})`, text: `已为你定好 ${washTimeMatch[1]} 的洗漱闹钟。` });
+    } else if (/午饭|午餐/.test(txt)) {
+      state.lifeTimers.lunch.food = txt;
+      state.chat.push({ role: "bot", extracted: `信号·午餐 (${txt})`, text: "已帮你记入今日午餐记录。" });
+    } else if (/晚饭|晚餐/.test(txt)) {
+      state.lifeTimers.dinner.food = txt;
+      state.chat.push({ role: "bot", extracted: `信号·晚餐 (${txt})`, text: "已帮你记入今日晚餐记录。" });
+    } else {
+      state.chat.push({ role: "bot", extracted: `今日随手记`, text: "收到，已经顺手记进今天的清单里了，不用你再手动填表。" });
+    }
+    input.value = "";
+    render();
+    setTimeout(() => { const s = $("#chatStream"); if (s) s.scrollTop = s.scrollHeight; }, 20);
+  });
+}
+
+function answerMorning(key, val) {
+  state.morningAnswers[key] = val;
+  // 联动习惯自动勾选，避免重复打勾！
+  if (key === "sunlight" && val.includes("晒了")) {
+    const h = state.habits.find((x) => x.id === "h2");
+    if (h) h.status = "done";
+  }
+  if (key === "vocab") {
+    const h = state.habits.find((x) => x.id === "h3");
+    if (h) h.status = val === "背完了" ? "done" : (val === "背了一部分" ? "partial" : "pending");
+  }
+  // 跳到下一个未答题
+  const nextIdx = MORNING_QUESTIONS.findIndex((q) => !state.morningAnswers[q.key]);
+  state.morningStep = nextIdx === -1 ? MORNING_QUESTIONS.length - 1 : nextIdx;
+  if (nextIdx === -1) {
+    state.chat.push({
+      role: "bot",
+      extracted: "晨间 5 项全部入账（并自动同步早起习惯）",
+      text: "太顺滑了！睡眠、起床、早餐和晨间习惯都已记好。下面挑一下今天要干的任务，就可以开第一轮 25 分钟番茄啦。"
+    });
+  }
+  render();
+}
+
+/* ==================== 全局事件 ==================== */
+$$("[data-view]").forEach((b) => b.addEventListener("click", () => {
+  state.view = b.dataset.view;
+  render();
+}));
+$$("[data-sim-nudge]").forEach((b) => b.addEventListener("click", () => openNudge(b.dataset.simNudge)));
+$("#toggleThemeBtn").addEventListener("click", () => {
+  state.dark = !state.dark;
+  document.documentElement.classList.toggle("dark", state.dark);
+});
+
+function render() {
+  syncChrome();
+  if (state.view === "focus-flow") renderFocusFlow();
+  else if (state.view === "full-day") renderFullDayView();
+  else renderSummaryView();
+}
+
+render();
+</script>
+</body>
+</html>

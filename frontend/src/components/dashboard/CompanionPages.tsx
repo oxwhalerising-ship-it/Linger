@@ -1,28 +1,58 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { api, formatLocalDate, type DailyLogDetail, type Insights, type ReportStats, type MemoryItem } from "../../services/api";
+import { isNetworkFetchError } from "../../services/api/client";
 import { IconMic, IconStop, IconArrowUp, IconSparkles, IconCalendar, IconAnalytics, IconClock } from "./AppleIcons";
 import { LocalWavRecorder } from "../../services/voiceRecorder";
 import { formatClock, useFocusClock } from "../../services/focusClock";
-function useResource<T>(load: () => Promise<T>) {
+function useResource<T>(load: () => Promise<T>, enabled = true) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision(n => n + 1), []);
   useEffect(() => {
+    const onReady = () => setRevision(n => n + 1);
+    window.addEventListener("linger-backend-ready", onReady);
+    window.addEventListener("linger-data-changed", onReady);
+    return () => {
+      window.removeEventListener("linger-backend-ready", onReady);
+      window.removeEventListener("linger-data-changed", onReady);
+    };
+  }, []);
+  useEffect(() => {
+    if (!enabled) {
+      setError("");
+      return;
+    }
     let live = true;
-    setError("");
-    setData(null);
-    load().then(v => {
-      if (live)
+    let retryTimer: number | null = null;
+    let attempt = 0;
+    const run = () => {
+      load().then(v => {
+        if (!live) return;
+        setError("");
         setData(v);
-    }).catch(e => {
-      if (live)
+      }).catch(e => {
+        if (!live) return;
+        if (isNetworkFetchError(e)) {
+          // 后端尚在启动或瞬时重连时静默重试，绝不弹出英文 TypeError: Failed to fetch
+          setError("");
+          attempt += 1;
+          const delayMs = attempt <= 6 ? 800 : 2000;
+          retryTimer = window.setTimeout(() => {
+            if (live) run();
+          }, delayMs);
+          return;
+        }
         setError(String(e));
-    });
+      });
+    };
+    setError("");
+    run();
     return () => {
       live = false;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [load, revision]);
+  }, [load, revision, enabled]);
   return { data, refresh, error, setError };
 }
 function Fault({ error }: {
@@ -96,7 +126,8 @@ export function Trend({ stats, open }: {
     </small>
   </>;
 }
-export function Today({ send, habits, tasks, focus, insights, joy, settings }: {
+export function Today({ ready = true, send, habits, tasks, focus, insights, joy, settings }: {
+  ready?: boolean;
   send: (v: string) => void;
   habits: () => void;
   tasks: () => void;
@@ -108,7 +139,7 @@ export function Today({ send, habits, tasks, focus, insights, joy, settings }: {
   const [draft, setDraft] = useState("");
   const today = formatLocalDate();
   const clock = useFocusClock();
-  const { data, error, setError, refresh } = useResource(useCallback(() => Promise.all([api.listHabits(true), api.getDailyLog(today), api.insights("weekly", today), api.getScheduleStatus(), api.listTasks("today", today)]), [today]));
+  const { data, error, setError, refresh } = useResource(useCallback(() => Promise.all([api.listHabits(true), api.getDailyLog(today), api.insights("weekly", today), api.getScheduleStatus(), api.listTasks("today", today)]), [today]), ready);
   const hour = new Date().getHours();
   const done = data?.[0].filter(h => data[1].habit_records.some(r => r.habit_id === h.id && r.status === "done")).length;
   const next = data?.[3].jobs.filter(j => j.next_run_time && new Date(j.next_run_time).getTime() > Date.now()).sort((a, b) => Date.parse(a.next_run_time!) - Date.parse(b.next_run_time!))[0];

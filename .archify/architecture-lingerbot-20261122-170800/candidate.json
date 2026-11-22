@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "灵儿（LingerBot）本地桌面 AI 伴侣系统架构",
+    "locale": "zh-CN",
+    "output": ".archify/architecture-lingerbot-20261122-170800/lingerbot-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/oxwhalerising-ship-it/Linger.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "842242caa8d6210801fb5a85082da84556367eb4"
+    },
+    "views": [
+      {
+        "id": "text-voice-loop",
+        "label": "对话与实时语音主轨",
+        "focus": ["user", "pet_win", "dash_win", "api_gateway", "agent_brain", "voice_pipeline", "llm_cloud", "tts_cloud"],
+        "note": "文字 SSE 与 /ws/voice-call 共用流式口语主轨，首句抢跑出声，习惯与记忆归档走后台副轨"
+      },
+      {
+        "id": "proactive-companion",
+        "label": "定时作息与离线唤醒",
+        "focus": ["proactive_engine", "local_models", "api_gateway", "pet_win", "dash_win"],
+        "note": "APScheduler 定时/随机冒泡与 sherpa-onnx KWS 纯内存唤醒均通过 /ws/events 广播给双窗口"
+      },
+      {
+        "id": "local-auth-storage",
+        "label": "本机鉴权与本地存储",
+        "focus": ["electron_main", "local_auth", "api_gateway", "agent_brain", "export_reports", "sqlite_db", "md_notes"],
+        "note": "127.0.0.1 回环令牌拦截未授权访问，数据全部落盘本地 SQLite 与 Obsidian 兼容 Markdown"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "icon": "person",
+      "label": "用户",
+      "sublabel": "Windows 桌面 / 语音",
+      "pos": [364, 40],
+      "size": [176, 58],
+      "sources": [
+        { "path": "README.md", "line": 7, "end_line": 13, "label": "双窗口交互入口" },
+        { "path": "start_linger.bat", "line": 1, "end_line": 37, "label": "一键启动脚本" }
+      ]
+    },
+    {
+      "id": "pet_win",
+      "type": "frontend",
+      "label": "桌宠浮窗",
+      "sublabel": "PetWindow · 透明置顶",
+      "pos": [48, 148],
+      "size": [176, 64],
+      "sources": [
+        { "path": "frontend/src/App.tsx", "line": 15, "end_line": 25, "label": "桌宠窗口路由" },
+        { "path": "frontend/src/services/voiceCallEngine.ts", "line": 88, "end_line": 120, "label": "实时通话前端引擎" }
+      ]
+    },
+    {
+      "id": "electron_main",
+      "type": "backend",
+      "label": "Electron 主进程",
+      "sublabel": "IPC · 托盘 · 窗口吸附",
+      "pos": [364, 148],
+      "size": [176, 66],
+      "sources": [
+        { "path": "frontend/electron/backendHost.cjs", "line": 50, "end_line": 102, "label": "后端探测与令牌读取" },
+        { "path": "frontend/electron/docking/win32Tracker.cjs", "line": 11, "end_line": 72, "label": "Win32 窗口吸附追踪" },
+        { "path": "frontend/electron/security.cjs", "line": 15, "end_line": 35, "label": "窗口导航安全防护" }
+      ]
+    },
+    {
+      "id": "dash_win",
+      "type": "frontend",
+      "label": "主控面板",
+      "sublabel": "Dashboard · React",
+      "pos": [680, 148],
+      "size": [176, 64],
+      "sources": [
+        { "path": "frontend/src/App.tsx", "line": 27, "end_line": 37, "label": "主控面板路由" },
+        { "path": "frontend/src/services/api/client.ts", "line": 19, "end_line": 60, "label": "鉴权 HTTP/WS 客户端" }
+      ]
+    },
+    {
+      "id": "local_auth",
+      "type": "security",
+      "label": "本机令牌鉴权",
+      "sublabel": "HTTP 令牌 · WS 子协议",
+      "tag": "X-Linger-Token",
+      "pos": [48, 308],
+      "size": [176, 66],
+      "sources": [
+        { "path": "backend/app/core/local_auth.py", "line": 32, "end_line": 45, "label": "linger.token 生成" },
+        { "path": "backend/app/core/local_auth.py", "line": 74, "end_line": 120, "label": "HTTP 与 WS 鉴权" },
+        { "path": "backend/app/main.py", "line": 53, "end_line": 65, "label": "中间件挂载顺序" }
+      ]
+    },
+    {
+      "id": "api_gateway",
+      "type": "backend",
+      "label": "FastAPI 路由与总线",
+      "sublabel": "REST · SSE · WS 双通道",
+      "pos": [364, 308],
+      "size": [176, 66],
+      "sources": [
+        { "path": "backend/app/main.py", "line": 46, "end_line": 94, "label": "路由注册与健康检查" },
+        { "path": "backend/app/routers/chat.py", "line": 70, "end_line": 90, "label": "SSE 流式文字对话" },
+        { "path": "backend/app/routers/voice_call.py", "line": 157, "end_line": 190, "label": "全双工通话 WebSocket" }
+      ]
+    },
+    {
+      "id": "proactive_engine",
+      "type": "messagebus",
+      "label": "作息调度与唤醒",
+      "sublabel": "APScheduler · KWS 唤醒",
+      "tag": "免打扰联动",
+      "pos": [680, 308],
+      "size": [176, 66],
+      "sources": [
+        { "path": "backend/app/services/scheduler_service.py", "line": 159, "end_line": 189, "label": "作息主动推送" },
+        { "path": "backend/app/services/wakeword_service.py", "line": 220, "end_line": 300, "label": "纯内存 KWS 监听与广播" },
+        { "path": "backend/app/routers/schedule.py", "line": 77, "end_line": 98, "label": "免打扰联动关唤醒" }
+      ]
+    },
+    {
+      "id": "export_reports",
+      "type": "backend",
+      "label": "日记导出与周月报",
+      "sublabel": "Markdown · 周/月报分析",
+      "pos": [48, 450],
+      "size": [176, 66],
+      "sources": [
+        { "path": "backend/app/services/markdown_exporter.py", "line": 167, "end_line": 218, "label": "每日复盘原子导出" },
+        { "path": "backend/app/services/report_service.py", "line": 343, "end_line": 382, "label": "周报月报生成落盘" }
+      ]
+    },
+    {
+      "id": "agent_brain",
+      "type": "backend",
+      "label": "对话大脑与归档",
+      "sublabel": "流式回复 · 后台提取归档",
+      "pos": [364, 450],
+      "size": [176, 66],
+      "sources": [
+        { "path": "backend/app/services/agent_brain.py", "line": 638, "end_line": 687, "label": "流式口语主轨" },
+        { "path": "backend/app/services/agent_brain.py", "line": 858, "end_line": 952, "label": "首句抢跑与副轨归档" }
+      ]
+    },
+    {
+      "id": "voice_pipeline",
+      "type": "backend",
+      "label": "语音识别与合成",
+      "sublabel": "SenseVoice STT · TTS",
+      "pos": [680, 450],
+      "size": [176, 66],
+      "sources": [
+        { "path": "backend/app/services/stt_service.py", "line": 297, "end_line": 349, "label": "本地 SenseVoice 听写" },
+        { "path": "backend/app/routers/voice.py", "line": 61, "end_line": 120, "label": "TTS 缓存与流式合成" },
+        { "path": "backend/app/routers/voice_call.py", "line": 82, "end_line": 140, "label": "并发合成与自动降级" }
+      ]
+    },
+    {
+      "id": "local_models",
+      "type": "database",
+      "label": "离线模型与缓存",
+      "sublabel": "models/ · audio_cache/",
+      "pos": [976, 378],
+      "size": [176, 68],
+      "sources": [
+        { "path": "backend/app/services/model_catalog.py", "line": 52, "end_line": 119, "label": "缺失语音模型后台下载" },
+        { "path": "backend/app/services/tts_provider.py", "line": 26, "end_line": 30, "label": "TTS 与垫词音频缓存目录" },
+        { "path": "backend/app/services/stt_service.py", "line": 25, "end_line": 26, "label": "ASR 模型存放路径" }
+      ]
+    },
+    {
+      "id": "md_notes",
+      "type": "database",
+      "label": "Markdown 笔记",
+      "sublabel": "data/notes/ · Obsidian",
+      "pos": [48, 616],
+      "size": [176, 64],
+      "sources": [
+        { "path": "backend/app/database.py", "line": 32, "end_line": 35, "label": "日/周/月笔记目录定义" },
+        { "path": "backend/app/services/markdown_exporter.py", "line": 27, "end_line": 38, "label": "防穿越路径校验" }
+      ]
+    },
+    {
+      "id": "sqlite_db",
+      "type": "database",
+      "label": "SQLite 日记库",
+      "sublabel": "data/taiwanbot.db",
+      "tag": "WAL 模式",
+      "pos": [264, 616],
+      "size": [176, 66],
+      "sources": [
+        { "path": "backend/app/database.py", "line": 19, "end_line": 31, "label": "数据目录与库路径" },
+        { "path": "backend/app/database.py", "line": 96, "end_line": 119, "label": "SQLite 连接与事务" },
+        { "path": "backend/app/database.py", "line": 275, "end_line": 366, "label": "业务表与索引初始化" }
+      ]
+    },
+    {
+      "id": "llm_cloud",
+      "type": "cloud",
+      "label": "云端大模型 API",
+      "sublabel": "OpenAI 兼容 · Gemini",
+      "tag": "无 Key 本地兜底",
+      "pos": [476, 616],
+      "size": [176, 66],
+      "sources": [
+        { "path": "backend/app/services/llm/client.py", "line": 24, "end_line": 50, "label": "复用连接池 LLM 客户端" },
+        { "path": "backend/app/services/llm/client.py", "line": 104, "end_line": 134, "label": "低思考档位自动探测" },
+        { "path": "backend/app/database.py", "line": 53, "end_line": 58, "label": "默认 Gemini 兼容地址" }
+      ]
+    },
+    {
+      "id": "tts_cloud",
+      "type": "cloud",
+      "label": "云端语音合成",
+      "sublabel": "Edge-TTS / Fish Audio",
+      "tag": "失败自动降级",
+      "pos": [680, 616],
+      "size": [176, 66],
+      "sources": [
+        { "path": "backend/app/services/tts_provider.py", "line": 106, "end_line": 140, "label": "EdgeTTSProvider 默认合成" },
+        { "path": "backend/app/services/tts_provider.py", "line": 189, "end_line": 260, "label": "FishAudioTTSProvider 与工厂" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Electron 桌面端（双渲染窗口与宿主）",
+      "wraps": ["pet_win", "electron_main", "dash_win"]
+    },
+    {
+      "kind": "region",
+      "label": "本地后端 FastAPI（127.0.0.1:8765）",
+      "wraps": ["local_auth", "api_gateway", "proactive_engine", "export_reports", "agent_brain", "voice_pipeline"]
+    }
+  ],
+  "connections": [
+    { "id": "user-to-pet", "from": "user", "to": "pet_win", "label": "桌宠互动 / 语音", "variant": "emphasis" },
+    { "id": "user-to-dash", "from": "user", "to": "dash_win", "label": "面板管理 / 对话" },
+    { "id": "pet-ipc-main", "from": "pet_win", "to": "electron_main", "label": "IPC 拖拽/托盘" },
+    { "id": "dash-ipc-main", "from": "dash_win", "to": "electron_main", "label": "IPC 窗口/令牌" },
+    { "id": "pet-to-api", "from": "pet_win", "to": "api_gateway", "label": "HTTP / WS 通话", "variant": "emphasis" },
+    { "id": "main-to-api", "from": "electron_main", "to": "api_gateway", "label": "启动 / 健康探测" },
+    { "id": "dash-to-api", "from": "dash_win", "to": "api_gateway", "label": "REST / SSE / WS", "variant": "emphasis" },
+    { "id": "auth-guard-api", "from": "local_auth", "to": "api_gateway", "label": "令牌 / WS 鉴权", "variant": "security" },
+    { "id": "proactive-to-bus", "from": "proactive_engine", "to": "api_gateway", "label": "推送 /ws/events" },
+    { "id": "api-to-export", "from": "api_gateway", "to": "export_reports", "label": "日志与报告" },
+    { "id": "api-to-brain", "from": "api_gateway", "to": "agent_brain", "label": "文字 SSE / 通话流", "variant": "emphasis" },
+    { "id": "api-to-voice", "from": "api_gateway", "to": "voice_pipeline", "label": "STT / TTS 调用" },
+    { "id": "brain-to-export", "from": "agent_brain", "to": "export_reports", "label": "异步刷新日记", "variant": "dashed" },
+    { "id": "proactive-to-models", "from": "proactive_engine", "to": "local_models", "label": "加载 KWS 模型" },
+    { "id": "voice-to-models", "from": "voice_pipeline", "to": "local_models", "label": "SenseVoice / 缓存" },
+    { "id": "export-to-md", "from": "export_reports", "to": "md_notes", "label": "原子写 .md" },
+    { "id": "export-to-db", "from": "export_reports", "to": "sqlite_db", "label": "聚合统计" },
+    { "id": "brain-to-db", "from": "agent_brain", "to": "sqlite_db", "label": "习惯 / 对话 / 记忆" },
+    { "id": "brain-to-llm", "from": "agent_brain", "to": "llm_cloud", "label": "流式生成 / 提取", "variant": "emphasis" },
+    { "id": "voice-to-tts", "from": "voice_pipeline", "to": "tts_cloud", "label": "合成 MP3 流" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "桌面双窗口与宿主",
+      "items": [
+        "桌宠浮窗（PetWindow）透明置顶，支持全局拖拽、Win32 外部窗口吸附与边缘探头",
+        "主控面板（Dashboard）涵盖今日/对话/习惯/任务/番茄钟/日记/洞察/记忆/设置，关闭仅退回托盘",
+        "Electron 主进程负责单实例、系统托盘、Alt+Shift+L 呼出、安全外链拦截及拉起 uvicorn 后端"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "双轨对话、语音与主动陪伴",
+      "items": [
+        "文字 SSE 与 /ws/voice-call 全双工共用流式口语主轨，首句凑齐即播；习惯、心情与长期记忆在后台副轨归档",
+        "听写固定使用本地离线 SenseVoice Small（sherpa-onnx），合成默认 Edge-TTS，可选 Fish Audio 并自动降级",
+        "APScheduler 驱动早午晚睡前与随机冒泡，sherpa-onnx KWS 纯内存离线唤醒，开启免打扰同步关闭唤醒"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "本机鉴权与本地数据",
+      "items": [
+        "后端仅监听 127.0.0.1:8765；HTTP 校验 X-Linger-Token，WebSocket 校验 linger-auth.<token> 子协议",
+        "Electron 主进程读取 data/linger.token 并经 preload 安全注入渲染层，阻止本机其他网页访问",
+        "全部数据落盘本地 data/：taiwanbot.db（SQLite WAL）、Obsidian 兼容 Markdown 笔记与离线模型缓存"
+      ]
+    }
+  ]
+}

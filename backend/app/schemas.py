@@ -301,3 +301,21 @@ class HabitBoardOut(BaseModel):
     date: str
     items: list[HabitBoardItem]
 
+
+class FocusCompanionRequest(BaseModel):
+    event: Literal["focus_completed", "break_completed"]
+    task_title: str = Field(default="", max_length=200)
+    focus_minutes: int = Field(default=25, ge=1, le=480)
+    round: int = Field(default=1, ge=0, le=50)
+    break_type: Literal["short", "long"] = "short"
+    mode: Literal["pomodoro", "stopwatch"] = "pomodoro"
+
+
+class FocusCompanionOut(BaseModel):
+    reply: str
+    sentences: list[str]
+    emotion: str
+    suggestion_tag: str
+    used_fallback: bool = False
+
+

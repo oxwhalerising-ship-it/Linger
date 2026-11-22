@@ -229,6 +229,34 @@ export default function VoiceCallOverlay({
           ];
         });
       },
+      onToolAction: (turnId, action) => {
+        if (cancelled) return;
+        const badge = action.badge?.trim();
+        if (!badge) return;
+        setSubtitles((prev) => {
+          const aid = `a-${turnId}`;
+          const exists = prev.some((item) => item.id === aid);
+          if (exists) {
+            return prev.map((item) => {
+              if (item.id !== aid) return item;
+              const nextTags = item.tags ? [...item.tags] : [];
+              if (!nextTags.includes(badge)) nextTags.push(badge);
+              return { ...item, tags: nextTags };
+            });
+          }
+          return [
+            ...prev,
+            {
+              id: aid,
+              turnId,
+              role: "assistant",
+              text: "",
+              streaming: true,
+              tags: [badge],
+            },
+          ];
+        });
+      },
       onTurnDone: ({ turnId, reply, emotion, latency }) => {
         if (cancelled) return;
         setLastLatency(latency);
@@ -272,9 +300,14 @@ export default function VoiceCallOverlay({
         if (cancelled) return;
         if (tags.length > 0) {
           setSubtitles((prev) =>
-            prev.map((item) =>
-              item.id === `a-${turnId}` ? { ...item, tags } : item,
-            ),
+            prev.map((item) => {
+              if (item.id !== `a-${turnId}`) return item;
+              const merged = [...(item.tags || [])];
+              for (const t of tags) {
+                if (t && !merged.includes(t)) merged.push(t);
+              }
+              return { ...item, tags: merged };
+            }),
           );
         }
         onArchiveUpdateRef.current({ turnId, tags, pendingHabits });
@@ -785,7 +818,7 @@ export default function VoiceCallOverlay({
             <button
               type="button"
               onClick={handleHangUp}
-              className="w-12 h-12 rounded-full bg-rose-500 hover:bg-rose-600 text-white flex items-center justify-center shadow-[0_6px_18px_rgba(244,63,94,0.35)] transition-all active:scale-95 cursor-pointer"
+              className="apple-btn apple-btn-danger w-12 h-12 rounded-full flex items-center justify-center cursor-pointer"
             >
               <IconPhoneOff className="w-5 h-5" />
             </button>

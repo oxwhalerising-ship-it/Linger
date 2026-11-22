@@ -11,6 +11,7 @@
 """
 
 import asyncio
+import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -43,10 +44,26 @@ async def websocket_events(websocket: WebSocket):
             }
         )
         while True:
-            # 维持连接并响应客户端心跳 ping
+            # 维持连接并处理心跳 ping、客户端身份声明（hello）与 UI 指令回执（ui_command_ack）
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_json({"type": "pong"})
+                continue
+            try:
+                msg = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(msg, dict):
+                continue
+            msg_type = str(msg.get("type") or "")
+            if msg_type == "ping":
+                await websocket.send_json({"type": "pong"})
+            elif msg_type == "hello":
+                await event_bus.set_client_role(websocket, str(msg.get("client") or "unknown"))
+            elif msg_type == "ui_command_ack":
+                command_id = str(msg.get("command_id") or "").strip()
+                if command_id:
+                    event_bus.resolve_ui_ack(command_id, msg)
     except WebSocketDisconnect:
         await event_bus.disconnect(websocket)
     except Exception:

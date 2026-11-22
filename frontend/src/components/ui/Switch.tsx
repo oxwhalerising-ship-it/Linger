@@ -24,13 +24,15 @@ export default function Switch({
       aria-label={ariaLabel}
       disabled={disabled}
       onClick={onChange}
-      className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center cursor-pointer disabled:opacity-40 shrink-0 ${
-        checked
-          ? "bg-emerald-500 justify-end"
-          : "bg-[var(--border-strong)] justify-start"
+      className={`relative w-[42px] h-[26px] rounded-full cursor-pointer disabled:opacity-40 shrink-0 transition-colors duration-200 ${
+        checked ? "bg-[var(--apple-green,#34c759)]" : "bg-[rgba(120,120,128,0.28)]"
       }`}
     >
-      <span className="w-4 h-4 rounded-full bg-white shadow-xs" />
+      <span
+        className={`absolute top-[2px] left-[2px] w-[22px] h-[22px] rounded-full bg-white shadow-[0_2px_6px_rgba(0,0,0,0.22)] transition-transform duration-200 ease-out ${
+          checked ? "translate-x-4" : "translate-x-0"
+        }`}
+      />
     </button>
   );
 }

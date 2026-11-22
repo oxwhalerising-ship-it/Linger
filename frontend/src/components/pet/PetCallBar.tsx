@@ -189,6 +189,18 @@ export default function PetCallBar({
         setCaption(fullText);
         setCaptionRole("assistant");
       },
+      onToolAction: (_turnId, action) => {
+        if (cancelled) return;
+        const badge = action.badge?.trim();
+        if (badge) {
+          setArchiveBadge(badge);
+          window.setTimeout(() => {
+            if (!cancelled) {
+              setArchiveBadge((prev) => (prev === badge ? null : prev));
+            }
+          }, 4200);
+        }
+      },
       onTurnDone: ({ turnId, reply, emotion, latency }) => {
         if (cancelled) return;
         setLastLatency(latency);
@@ -380,7 +392,7 @@ export default function PetCallBar({
     callState === "user_speaking" ? "确认发送" : "打断";
 
   return (
-    <div className="w-[292px] rounded-2xl bg-white/94 backdrop-blur-md border border-sky-200/90 shadow-[0_10px_28px_rgba(37,99,235,0.16)] px-3 py-2.5 space-y-2 animate-bubble-pop text-slate-800">
+    <div className="apple-sheet w-[292px] rounded-[22px] px-3 py-2.5 space-y-2 animate-bubble-pop">
       {/* 顶行：状态脉动点 + 计时 + 首音延迟 */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -394,7 +406,7 @@ export default function PetCallBar({
               className={`relative inline-flex rounded-full h-2 w-2 ${statusMeta.dotClass}`}
             />
           </span>
-          <span className="text-[11.5px] font-semibold text-slate-700 truncate">
+          <span className="text-[12px] font-semibold tracking-[-0.01em] text-[#1d1d1f] truncate">
             {statusMeta.label}
           </span>
           <span className="text-[11px] font-medium tabular-nums text-slate-400">
@@ -411,10 +423,8 @@ export default function PetCallBar({
                 ? "当前：手动确认发送（思考停顿不断句，说完按空格或点确认发送）"
                 : "当前：自动停顿发送（停顿 1.4 秒自动发送）"
             }
-            className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium border transition-colors cursor-pointer ${
-              manualCommitMode
-                ? "bg-sky-50 text-blue-700 border-sky-200/90"
-                : "bg-slate-100 text-slate-500 border-slate-200/80"
+            className={`apple-btn px-1.5 py-0.5 text-[11px] cursor-pointer ${
+              manualCommitMode ? "apple-btn-fill" : "apple-btn-plain"
             }`}
           >
             {manualCommitMode ? "手动发" : "自动发"}
@@ -433,7 +443,7 @@ export default function PetCallBar({
       </div>
 
       {/* 中段：紧凑实时字幕 / 异常重连提示 */}
-      <div className="min-h-[32px] max-h-[42px] overflow-hidden rounded-xl bg-sky-50/75 border border-sky-100/95 px-2.5 py-1.5 flex items-center justify-between gap-2">
+      <div className="min-h-[32px] max-h-[42px] overflow-hidden rounded-xl apple-well px-2.5 py-1.5 flex items-center justify-between gap-2">
         <p
           className={`text-[11.5px] leading-[1.38] line-clamp-2 break-words flex-1 ${
             captionRole === "user"
@@ -462,10 +472,8 @@ export default function PetCallBar({
           type="button"
           onClick={handleToggleMute}
           title={muted ? "取消麦克风静音" : "静音麦克风"}
-          className={`h-8 w-8 rounded-full flex items-center justify-center transition-all active:scale-95 cursor-pointer border ${
-            muted
-              ? "bg-rose-50 border-rose-200 text-rose-600"
-              : "bg-sky-50/80 border-sky-200/80 text-slate-700 hover:bg-sky-100/80"
+          className={`apple-btn h-8 w-8 rounded-full flex items-center justify-center cursor-pointer ${
+            muted ? "bg-[rgba(255,59,48,0.12)] text-[#ff3b30]" : "apple-btn-plain"
           }`}
         >
           {muted ? (
@@ -480,10 +488,8 @@ export default function PetCallBar({
           onClick={handleInterruptOrCommit}
           disabled={!actionActive}
           title="灵儿说话时按「空格」或点击立刻打断；自己说话时按「空格」或点击立刻发送"
-          className={`flex-1 h-8 px-2.5 rounded-full flex items-center justify-center gap-1 text-[11.5px] font-medium transition-all active:scale-95 cursor-pointer disabled:opacity-45 disabled:cursor-default ${
-            actionActive
-              ? "bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-700 hover:to-sky-600 text-white shadow-[0_4px_12px_rgba(37,99,235,0.26)]"
-              : "bg-slate-100 text-slate-400 border border-slate-200/70"
+          className={`apple-btn flex-1 h-8 px-2.5 flex items-center justify-center gap-1 text-[12px] cursor-pointer disabled:opacity-40 disabled:cursor-default ${
+            actionActive ? "apple-btn-fill" : "apple-btn-plain"
           }`}
         >
           <IconHand className="w-3.5 h-3.5" />
@@ -507,10 +513,8 @@ export default function PetCallBar({
               ? "随时插话：已开启（外放若易回声可点此关闭）"
               : "随时插话：已关闭（防回声模式）"
           }
-          className={`h-8 w-8 rounded-full flex items-center justify-center transition-all active:scale-95 cursor-pointer border ${
-            bargeInEnabled
-              ? "bg-sky-50 border-sky-200 text-blue-600 hover:bg-sky-100/80"
-              : "bg-slate-100/90 border-slate-200/70 text-slate-400 hover:text-slate-600"
+          className={`apple-btn h-8 w-8 rounded-full flex items-center justify-center cursor-pointer ${
+            bargeInEnabled ? "apple-btn-fill" : "apple-btn-plain"
           }`}
         >
           <IconWaveform className="w-3.5 h-3.5" />
@@ -520,7 +524,7 @@ export default function PetCallBar({
           type="button"
           onClick={handleHangUpClick}
           title="挂断语音通话"
-          className="h-8 px-3 rounded-full bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white flex items-center justify-center gap-1 text-[11.5px] font-medium shadow-[0_4px_12px_rgba(244,63,94,0.28)] transition-all active:scale-95 cursor-pointer"
+          className="apple-btn apple-btn-danger h-8 px-3 flex items-center justify-center gap-1 text-[12px] cursor-pointer"
         >
           <IconPhoneOff className="w-3.5 h-3.5" />
           <span>挂断</span>

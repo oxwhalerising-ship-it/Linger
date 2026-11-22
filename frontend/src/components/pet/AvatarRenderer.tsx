@@ -9,7 +9,9 @@
 
 import type { RefObject } from "react";
 import type { AvatarConfig, PetDockPose, PetEmotion } from "../../types/pet";
-import LingerAvatar from "./LingerAvatar";
+import LingerAvatar, { type TomatoClockProp } from "./LingerAvatar";
+
+export type { TomatoClockProp };
 
 interface AvatarRendererProps {
   emotion: PetEmotion;
@@ -24,6 +26,12 @@ interface AvatarRendererProps {
   isDragging?: boolean;
   /** 展开环绕按钮时的撒向天空手势 */
   isCastingMenu?: boolean;
+  /** 番茄时钟飞行姿态 */
+  flightPose?: "none" | "fly-right" | "fly-left";
+  /** 迷你灵儿托着番茄圆环姿态 */
+  holdingFocus?: boolean;
+  /** 怀抱立体番茄造型倒计时时钟状态 */
+  tomatoClock?: TomatoClockProp | null;
   /** 边缘躲藏偷看 / 应用窗口边框倚靠与坐下姿态 */
   dockPose?: PetDockPose;
   /** 鼠标视线与头部追踪目标 */
@@ -69,6 +77,9 @@ export default function AvatarRenderer({
   patMood = "shy",
   isDragging = false,
   isCastingMenu = false,
+  flightPose = "none",
+  holdingFocus = false,
+  tomatoClock = null,
   dockPose = "none",
   lookTarget = null,
   cleanMode = false,
@@ -149,6 +160,9 @@ export default function AvatarRenderer({
       patMood={patMood}
       isDragging={isDragging}
       isCastingMenu={isCastingMenu}
+      flightPose={flightPose}
+      holdingFocus={holdingFocus}
+      tomatoClock={tomatoClock}
       dockPose={dockPose}
       lookTarget={lookTarget}
       cleanMode={cleanMode}

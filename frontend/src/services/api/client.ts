@@ -19,9 +19,27 @@ let tokenPromise: Promise<string> | null = null;
 export function getAuthToken(): Promise<string> {
   if (!tokenPromise) {
     const reader = desktopEnv()?.getAuthToken;
-    tokenPromise = reader ? reader().then((token) => token || "") : Promise.resolve("");
+    tokenPromise = reader
+      ? reader()
+          .then((token) => {
+            if (!token) tokenPromise = null;
+            return token || "";
+          })
+          .catch(() => {
+            tokenPromise = null;
+            return "";
+          })
+      : Promise.resolve("");
   }
   return tokenPromise;
+}
+
+/** 判断是否为后端尚未启动/瞬时断连引起的网络 fetch 异常 */
+export function isNetworkFetchError(err: unknown): boolean {
+  const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err ?? "");
+  return /Failed to fetch|NetworkError|Load failed|ERR_CONNECTION_REFUSED|fetch failed/i.test(
+    text,
+  );
 }
 
 export async function buildAuthHeaders(

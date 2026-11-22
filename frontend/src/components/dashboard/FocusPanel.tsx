@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, formatLocalDate, type FocusOverview, type TaskItem } from "../../services/api";
+import { isNetworkFetchError } from "../../services/api/client";
 import {
+  PRESET_FOCUS_MINUTES,
   formatClock,
   pauseFocus,
   setFinishTask,
@@ -11,7 +13,6 @@ import {
   startFocus,
   stopFocus,
   useFocusClock,
-  type FocusMinutes,
   type FocusMode,
 } from "../../services/focusClock";
 
@@ -65,12 +66,25 @@ export default function FocusPanel() {
       setOverview(summary);
       setError("");
     } catch (err) {
+      if (isNetworkFetchError(err)) {
+        setError("");
+        return;
+      }
       setError(err instanceof Error ? err.message : "专注记录没有加载出来");
     }
   }, [today]);
 
   useEffect(() => {
     void load();
+    const onRefresh = () => void load();
+    window.addEventListener("linger-backend-ready", onRefresh);
+    window.addEventListener("linger-plan", onRefresh);
+    window.addEventListener("linger-data-changed", onRefresh);
+    return () => {
+      window.removeEventListener("linger-backend-ready", onRefresh);
+      window.removeEventListener("linger-plan", onRefresh);
+      window.removeEventListener("linger-data-changed", onRefresh);
+    };
   }, [load, clock.phase, clock.pending]);
 
   function choose(mode: FocusMode) {
@@ -95,11 +109,16 @@ export default function FocusPanel() {
       </div>
 
       {idle && clock.mode === "pomodoro" && <div className="l-pomo-lengths" aria-label="专注时长">
-        {([15, 25, 45] as FocusMinutes[]).map((minutes) => (
+        {PRESET_FOCUS_MINUTES.map((minutes) => (
           <button key={minutes} aria-pressed={clock.focusMinutes === minutes} onClick={() => setFocusMinutes(minutes)}>
             {minutes}
           </button>
         ))}
+        {!(PRESET_FOCUS_MINUTES as readonly number[]).includes(clock.focusMinutes) && (
+          <button aria-pressed={true} onClick={() => setFocusMinutes(clock.focusMinutes)}>
+            {clock.focusMinutes}m
+          </button>
+        )}
       </div>}
 
       <div className="l-pomo-pick">

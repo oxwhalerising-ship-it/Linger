@@ -31,6 +31,8 @@ const {
 Menu.setApplicationMenu(null);
 
 let petWindow = null;
+let petWindowReady = false;
+let petRevealTimer = null;
 let dashboardWindow = null;
 let tray = null;
 
@@ -52,6 +54,15 @@ const PET_EXPANDED_WIDTH = 380;
 const PET_EXPANDED_HEIGHT = 440;
 const PET_CALL_WIDTH = 380;
 const PET_CALL_HEIGHT = 476;
+const PET_FOCUS_SETUP_WIDTH = 380;
+const PET_FOCUS_SETUP_HEIGHT = 508;
+const PET_FOCUS_WIDTH = 246;
+const PET_FOCUS_HEIGHT = 284;
+const PET_FOCUS_ALERT_WIDTH = 380;
+const PET_FOCUS_ALERT_HEIGHT = 420;
+
+// 记忆开启番茄钟起飞前的原始桌面坐标，全部结束后平滑飞回原位
+let petSavedOriginBounds = null;
 
 // 主进程拖拽追踪状态（基于全局光标坐标，彻底规避 Windows DPI 缩放漂移与跨屏断触）
 let petDragState = null;
@@ -135,6 +146,15 @@ function getPetDimensionsForMode(mode) {
   if (mode === "quick-chat") {
     return { width: PET_EXPANDED_WIDTH, height: PET_EXPANDED_HEIGHT };
   }
+  if (mode === "focus-setup") {
+    return { width: PET_FOCUS_SETUP_WIDTH, height: PET_FOCUS_SETUP_HEIGHT };
+  }
+  if (mode === "focus") {
+    return { width: PET_FOCUS_WIDTH, height: PET_FOCUS_HEIGHT };
+  }
+  if (mode === "focus-alert") {
+    return { width: PET_FOCUS_ALERT_WIDTH, height: PET_FOCUS_ALERT_HEIGHT };
+  }
   return { width: PET_COMPACT_WIDTH, height: PET_COMPACT_HEIGHT };
 }
 
@@ -216,6 +236,92 @@ function animatePetWindowTo(targetX, targetY, durationMs = 220, onDone) {
       if (onDone) onDone();
     }
   }, 16);
+}
+
+/**
+ * 真实感浮力弧线飞行补间（60fps）：
+ * - buoyant=true（抱番茄缓慢升空）：先做微幅下蹲蓄力起跳，再沿柔和浮力弧线+轻微呼吸起伏缓慢升至目标点；
+ * - buoyant=false（返程飞回原位）：轻盈御风贝塞尔弧线飞回。
+ */
+function flyPetWindowTo(targetX, targetY, durationMs = 760, options = {}) {
+  const buoyant = Boolean(options && options.buoyant);
+  return new Promise((resolve) => {
+    if (!petWindow || petWindow.isDestroyed()) {
+      resolve({ ok: false, direction: "none" });
+      return;
+    }
+    stopPetSlideAnim();
+    const bounds = petWindow.getBounds();
+    const { width: targetW, height: targetH } =
+      getPetDimensionsForMode(petWindowMode);
+    const startX = bounds.x;
+    const startY = bounds.y;
+    const endX = Math.round(targetX);
+    const endY = Math.round(targetY);
+    const dx = endX - startX;
+    const dy = endY - startY;
+    const dist = Math.hypot(dx, dy);
+    const direction = dx >= 0 ? "fly-right" : "fly-left";
+
+    if (dist <= 6) {
+      applyPetWindowBounds(endX, endY, targetW, targetH);
+      resolve({ ok: true, direction });
+      return;
+    }
+
+    const arcLift = buoyant
+      ? Math.min(130, Math.max(48, dist * 0.2))
+      : Math.min(110, Math.max(36, dist * 0.16));
+    const ctrlX = (startX + endX) / 2;
+    const ctrlY = Math.min(startY, endY) - arcLift;
+    const actualDuration = buoyant
+      ? Math.max(1150, Math.min(1800, Math.round(durationMs + dist * 0.48)))
+      : Math.max(420, Math.min(durationMs, Math.round(340 + dist * 0.42)));
+    const startMs = Date.now();
+
+    sendToPet("pet:flight-state", { active: true, direction });
+
+    petSlideTimer = setInterval(() => {
+      if (!petWindow || petWindow.isDestroyed()) {
+        stopPetSlideAnim();
+        resolve({ ok: false, direction: "none" });
+        return;
+      }
+      const elapsed = Date.now() - startMs;
+      const t = Math.min(1, elapsed / actualDuration);
+
+      let curX;
+      let curY;
+      if (buoyant && t < 0.11) {
+        // 起跳前的微幅下蹲蓄力感（+12px 下沉再弹起）
+        const dip = Math.sin((t / 0.11) * Math.PI);
+        curX = startX;
+        curY = Math.round(startY + dip * 12);
+      } else {
+        const moveT = buoyant ? (t - 0.11) / 0.89 : t;
+        // 柔和正弦缓入缓出：升空起势稳、中段飘逸、落地轻缓
+        const u = buoyant
+          ? 0.5 - 0.5 * Math.cos(Math.PI * moveT)
+          : moveT < 0.5
+            ? 4 * moveT * moveT * moveT
+            : 1 - Math.pow(-2 * moveT + 2, 3) / 2;
+        const inv = 1 - u;
+        // 缓慢升空时附加极轻微的漂浮波浪感，让飞行更鲜活立体
+        const floatWave = buoyant ? Math.sin(moveT * Math.PI * 2) * (1 - moveT) * 7 : 0;
+        curX = Math.round(inv * inv * startX + 2 * inv * u * ctrlX + u * u * endX);
+        curY = Math.round(
+          inv * inv * startY + 2 * inv * u * ctrlY + u * u * endY + floatWave,
+        );
+      }
+
+      petWindow.setBounds({ x: curX, y: curY, width: targetW, height: targetH });
+      if (t >= 1) {
+        stopPetSlideAnim();
+        sendToPet("pet:flight-state", { active: false, direction: "none" });
+        resolve({ ok: true, direction });
+      }
+    }, 16);
+  });
 }
 
 const win32WindowTracker = createWin32WindowTracker({
@@ -678,9 +784,13 @@ function summonPetToStage() {
       Math.min(wa.y + wa.height - targetH - 16, Math.round(cursor.y - targetH / 2)),
     );
     applyPetWindowBounds(x, y, targetW, targetH);
-    petWindow.showInactive();
+    if (petWindowReady) {
+      revealPetWindow();
+    }
   } else if (wasPeeking && revealTarget) {
-    petWindow.showInactive();
+    if (petWindowReady) {
+      revealPetWindow();
+    }
     animatePetWindowTo(revealTarget.x, revealTarget.y, 240);
   } else {
     // 已在屏幕上可见：确保处于当前屏幕工作区内并置顶亮相
@@ -695,7 +805,9 @@ function summonPetToStage() {
       wa.y + 12,
       Math.min(wa.y + wa.height - targetH - 12, bounds.y),
     );
-    petWindow.showInactive();
+    if (petWindowReady) {
+      revealPetWindow();
+    }
     if (clampedX !== bounds.x || clampedY !== bounds.y) {
       animatePetWindowTo(clampedX, clampedY, 200);
     }
@@ -727,7 +839,8 @@ function registerSummonShortcut() {
 }
 
 /**
- * 强制校准桌宠窗口内容区尺寸与位置（规避 Windows HiDPI + resizable:false 下 setBounds 失效或缩放漂移）
+ * 强制校准桌宠窗口内容区尺寸与位置（通过 min/max 锁定尺寸，绝不反复切换 setResizable，
+ * 避免 Windows DWM 切换 WS_THICKFRAME 时在透明窗口上闪出白框背景）
  */
 function applyPetWindowBounds(x, y, targetW, targetH) {
   if (!petWindow || petWindow.isDestroyed()) return;
@@ -736,34 +849,44 @@ function applyPetWindowBounds(x, y, targetW, targetH) {
   const [curCW, curCH] = petWindow.getContentSize();
   const curBounds = petWindow.getBounds();
 
+  const needsResize =
+    Math.abs(curCW - targetW) > 2 || Math.abs(curCH - targetH) > 2;
   if (
     curBounds.x === roundedX &&
     curBounds.y === roundedY &&
-    curCW === targetW &&
-    curCH === targetH
+    !needsResize
   ) {
     return;
   }
 
-  const needsResize = curCW !== targetW || curCH !== targetH;
   if (needsResize) {
-    petWindow.setResizable(true);
-    petWindow.setBounds({
-      x: roundedX,
-      y: roundedY,
-      width: targetW,
-      height: targetH,
-    });
-    petWindow.setContentSize(targetW, targetH);
-    petWindow.setResizable(false);
-  } else {
-    petWindow.setBounds({
-      x: roundedX,
-      y: roundedY,
-      width: targetW,
-      height: targetH,
-    });
+    petWindow.setMinimumSize(targetW, targetH);
+    petWindow.setMaximumSize(targetW, targetH);
   }
+  petWindow.setBounds({
+    x: roundedX,
+    y: roundedY,
+    width: targetW,
+    height: targetH,
+  });
+}
+
+/** 确认透明首帧绘制完成后再无闪烁显示桌宠，彻底消除启动白框 */
+function revealPetWindow() {
+  if (petRevealTimer) {
+    clearTimeout(petRevealTimer);
+    petRevealTimer = null;
+  }
+  if (!petWindow || petWindow.isDestroyed()) return;
+  petWindowReady = true;
+  petWindow.setBackgroundColor("#00000000");
+  lockPetWindowZoom();
+  if (!petWindow.isVisible()) {
+    petWindow.showInactive();
+  }
+  petWindow.setAlwaysOnTop(isAlwaysOnTop, "screen-saver");
+  tryAttachPetToDashboardIfInside();
+  refreshTrayMenu();
 }
 
 /** 锁定桌宠页面缩放为 100%，防止主控面板同源缩放（Ctrl+滚轮）连带放大裁切桌宠 */
@@ -800,14 +923,18 @@ function applyPetDragPosition() {
   });
 }
 
-/** 切换桌宠窗口模式（compact / quick-chat / call），保持小精灵在屏幕上的视觉位置不动并避免贴边裁切 */
+/** 切换桌宠窗口模式（compact / quick-chat / call / focus / focus-alert），保持小精灵视觉连贯不裁切 */
 function setPetWindowMode(nextMode) {
   const normalized =
     typeof nextMode === "boolean"
       ? nextMode
         ? "quick-chat"
         : "compact"
-      : nextMode === "call" || nextMode === "quick-chat"
+      : nextMode === "call" ||
+          nextMode === "quick-chat" ||
+          nextMode === "focus-setup" ||
+          nextMode === "focus" ||
+          nextMode === "focus-alert"
         ? nextMode
         : "compact";
 
@@ -827,15 +954,32 @@ function setPetWindowMode(nextMode) {
     lockPetWindowZoom();
     return;
   }
+  const prevMode = petWindowMode;
+  const display = screen.getDisplayMatching(bounds);
+  const workArea = display.workArea;
   const deltaX = Math.round((bounds.width - targetW) / 2);
   let nextX = bounds.x + deltaX;
   let nextY = bounds.y;
 
-  // 展开为通话卡片或输入条时，先退出边缘躲藏/依附状态，若靠屏幕底部/边缘太近则轻柔内收，避免按钮被任务栏遮挡
-  if (normalized !== "compact") {
+  // 番茄专注态与右上角提醒态严格贴齐主屏幕工作区最右上角，切换形态时零跳变、不遮挡主工作区
+  if (normalized === "focus" || normalized === "focus-alert") {
     clearPetDockState(true);
-    const display = screen.getDisplayMatching(bounds);
-    const workArea = display.workArea;
+    const primaryWorkArea = screen.getPrimaryDisplay().workArea;
+    if (
+      prevMode === "focus" ||
+      prevMode === "focus-alert" ||
+      prevMode === "compact"
+    ) {
+      nextX = Math.round(primaryWorkArea.x + primaryWorkArea.width - targetW - 14);
+      nextY = Math.round(primaryWorkArea.y + 12);
+    }
+    if (nextX < primaryWorkArea.x + 8) nextX = primaryWorkArea.x + 8;
+    if (nextY + targetH > primaryWorkArea.y + primaryWorkArea.height - 8) {
+      nextY = primaryWorkArea.y + primaryWorkArea.height - targetH - 8;
+    }
+  } else if (normalized !== "compact") {
+    // 展开为通话卡片或输入条时，先退出边缘躲藏/依附状态，若靠屏幕底部/边缘太近则轻柔内收，避免按钮被任务栏遮挡
+    clearPetDockState(true);
     if (nextX + targetW > workArea.x + workArea.width - 8) {
       nextX = workArea.x + workArea.width - targetW - 8;
     }
@@ -848,15 +992,27 @@ function setPetWindowMode(nextMode) {
     if (nextY < workArea.y + 8) {
       nextY = workArea.y + 8;
     }
+  } else if (prevMode === "focus" || prevMode === "focus-alert") {
+    // 从番茄/提醒态切回 compact（如准备飞回原位）时保持中心对齐且不跑出屏幕顶边
+    nextX = Math.round(bounds.x + (bounds.width - targetW) / 2);
+    nextY = Math.round(bounds.y + (bounds.height - targetH) / 2);
+    if (nextX + targetW > workArea.x + workArea.width) {
+      nextX = workArea.x + workArea.width - targetW;
+    }
+    if (nextY < workArea.y) {
+      nextY = workArea.y;
+    }
   }
 
   petWindowMode = normalized;
   applyPetWindowBounds(nextX, nextY, targetW, targetH);
   lockPetWindowZoom();
 
-  // 快捷输入与实时通话态均需允许键盘聚焦，确保桌宠对话/打电话时可直接按「空格键」手动确认发送或打断
+  // 快捷输入、番茄配置卡与实时通话态均需允许键盘聚焦
   const needsKeyboardFocus =
-    normalized === "quick-chat" || normalized === "call";
+    normalized === "quick-chat" ||
+    normalized === "call" ||
+    normalized === "focus-setup";
   petWindow.setFocusable(needsKeyboardFocus);
   if (needsKeyboardFocus) {
     if (!petWindow.isVisible()) {
@@ -871,21 +1027,34 @@ function setPetWindowMode(nextMode) {
  */
 function createPetWindow() {
   if (petWindow && !petWindow.isDestroyed()) {
-    petWindow.showInactive();
+    if (petWindowReady) {
+      petWindow.showInactive();
+    }
     return petWindow;
   }
 
+  petWindowReady = false;
+  if (petRevealTimer) {
+    clearTimeout(petRevealTimer);
+    petRevealTimer = null;
+  }
   petWindowMode = "compact";
   const pos = getDefaultPetPosition("compact");
 
   petWindow = new BrowserWindow({
     width: PET_COMPACT_WIDTH,
     height: PET_COMPACT_HEIGHT,
+    minWidth: PET_COMPACT_WIDTH,
+    maxWidth: PET_COMPACT_WIDTH,
+    minHeight: PET_COMPACT_HEIGHT,
+    maxHeight: PET_COMPACT_HEIGHT,
     useContentSize: true,
     x: pos.x,
     y: pos.y,
     title: "",
     icon: loadAppIcon(),
+    show: false,
+    paintWhenInitiallyHidden: true,
     transparent: true,
     backgroundColor: "#00000000",
     backgroundMaterial: "none",
@@ -894,7 +1063,7 @@ function createPetWindow() {
     roundedCorners: false,
     autoHideMenuBar: true,
     alwaysOnTop: isAlwaysOnTop,
-    resizable: false,
+    resizable: true,
     maximizable: false,
     minimizable: false,
     fullscreenable: false,
@@ -920,19 +1089,19 @@ function createPetWindow() {
   // 提升 Windows 置顶层级，确保在普通办公软件上方可见
   petWindow.setAlwaysOnTop(isAlwaysOnTop, "screen-saver");
 
-  // 页面加载完成时强制重置缩放为 100% 并校准内容区尺寸，彻底杜绝同源缩放或 HiDPI 裁切
+  // 页面加载完成时强制重置缩放为 100% 并等待渲染层首帧透明绘制完成后再显示，彻底消除启动白框
   petWindow.webContents.on("dom-ready", () => {
     lockPetWindowZoom();
   });
   petWindow.webContents.on("did-finish-load", () => {
     if (!petWindow || petWindow.isDestroyed()) return;
     lockPetWindowZoom();
-    const bounds = petWindow.getBounds();
-    const { width: targetW, height: targetH } =
-      getPetDimensionsForMode(petWindowMode);
-    applyPetWindowBounds(bounds.x, bounds.y, targetW, targetH);
-    tryAttachPetToDashboardIfInside();
     sendToPet("pet:dnd-changed", isDndEnabled);
+    if (!petWindowReady) {
+      petRevealTimer = setTimeout(() => {
+        revealPetWindow();
+      }, 350);
+    }
   });
 
   attachWindowSecurityGuards(petWindow);
@@ -949,6 +1118,11 @@ function createPetWindow() {
   });
 
   petWindow.on("closed", () => {
+    if (petRevealTimer) {
+      clearTimeout(petRevealTimer);
+      petRevealTimer = null;
+    }
+    petWindowReady = false;
     stopPetDragLoop();
     stopPetSlideAnim();
     stopExternalWindowTracker();
@@ -1118,8 +1292,8 @@ function refreshTrayMenu() {
       click: () => {
         if (!petWindow || petWindow.isDestroyed()) {
           createPetWindow();
-        } else if (!petWindow.isVisible()) {
-          petWindow.show();
+        } else if (!petWindow.isVisible() && petWindowReady) {
+          revealPetWindow();
         }
         sendToPet("pet:toggle-voice-call");
         refreshTrayMenu();
@@ -1136,8 +1310,8 @@ function refreshTrayMenu() {
           createPetWindow();
         } else if (petWindow.isVisible()) {
           petWindow.hide();
-        } else {
-          petWindow.show();
+        } else if (petWindowReady) {
+          revealPetWindow();
         }
         refreshTrayMenu();
       },
@@ -1154,7 +1328,9 @@ function refreshTrayMenu() {
           getPetDimensionsForMode(petWindowMode);
         applyPetWindowBounds(pos.x, pos.y, targetW, targetH);
         lockPetWindowZoom();
-        petWindow.show();
+        if (petWindowReady) {
+          revealPetWindow();
+        }
         refreshTrayMenu();
       },
     },
@@ -1218,6 +1394,11 @@ function setupIpcHandlers() {
     }
   });
 
+  // 1.1 渲染层首帧透明立绘绘制完成后，通知主进程正式显示桌宠窗口（防白框闪烁）
+  ipcMain.on("pet:ready", () => {
+    revealPetWindow();
+  });
+
   // 2. 平滑全局拖拽：记录起点并基于主进程实时光标坐标同步窗口位置
   ipcMain.on("pet:drag-start", () => {
     if (!petWindow || petWindow.isDestroyed()) return;
@@ -1248,7 +1429,101 @@ function setupIpcHandlers() {
 
   ipcMain.on("pet:drag-end", () => {
     stopPetDragLoop();
+    if (petWindowMode === "focus" || petWindowMode === "focus-alert") {
+      return;
+    }
     void detectAndApplyDockState();
+  });
+
+  // 2.1 番茄时钟飞行变身：记忆起飞前原位（若桌宠被隐藏则自动唤出）并以弧线飞向当前显示器右上角
+  ipcMain.handle("pet:fly-to-focus", async () => {
+    if (!petWindow || petWindow.isDestroyed()) {
+      createPetWindow();
+    }
+    if (!petWindow || petWindow.isDestroyed()) {
+      return { ok: false, direction: "none" };
+    }
+    if (!petWindow.isVisible()) {
+      revealPetWindow();
+    }
+    clearPetDockState(true);
+    stopPetDragLoop();
+
+    // 首次进入番茄流程时记录起飞前原始坐标（按 compact 中心对齐）
+    if (!petSavedOriginBounds) {
+      const cur = petWindow.getBounds();
+      petSavedOriginBounds = {
+        x: Math.round(cur.x + (cur.width - PET_COMPACT_WIDTH) / 2),
+        y: Math.round(cur.y + (cur.height - PET_COMPACT_HEIGHT) / 2),
+      };
+    }
+
+    if (petWindowMode !== "compact") {
+      setPetWindowMode("compact");
+    }
+
+    const workArea = screen.getPrimaryDisplay().workArea;
+    // 对齐最终坐姿抱番茄卡片在主屏幕右上角的视觉中心点，实现落地坐下零跳变
+    const focusX = Math.round(workArea.x + workArea.width - PET_FOCUS_WIDTH - 14);
+    const focusY = Math.round(workArea.y + 12);
+    let targetX = Math.round(focusX + (PET_FOCUS_WIDTH - PET_COMPACT_WIDTH) / 2);
+    let targetY = Math.round(focusY + (PET_FOCUS_HEIGHT - PET_COMPACT_HEIGHT) / 2);
+    if (targetX + PET_COMPACT_WIDTH > workArea.x + workArea.width + 24) {
+      targetX = Math.round(workArea.x + workArea.width - PET_COMPACT_WIDTH + 24);
+    }
+    if (targetY < workArea.y - 24) {
+      targetY = Math.round(workArea.y - 24);
+    }
+    return await flyPetWindowTo(targetX, targetY, 1280, { buoyant: true });
+  });
+
+  // 2.15 番茄钟全部结束后，从右上角以弧线平滑飞回起飞前的原始桌面位置
+  ipcMain.handle("pet:fly-back-origin", async () => {
+    if (!petWindow || petWindow.isDestroyed()) {
+      petSavedOriginBounds = null;
+      return { ok: false, direction: "none" };
+    }
+    clearPetDockState(true);
+    stopPetDragLoop();
+    if (petWindowMode !== "compact") {
+      setPetWindowMode("compact");
+    }
+    const saved = petSavedOriginBounds || getDefaultPetPosition("compact");
+    petSavedOriginBounds = null;
+    const display = screen.getDisplayMatching({
+      x: saved.x,
+      y: saved.y,
+      width: PET_COMPACT_WIDTH,
+      height: PET_COMPACT_HEIGHT,
+    });
+    const workArea = display.workArea;
+    const destX = Math.max(
+      workArea.x - 16,
+      Math.min(workArea.x + workArea.width - PET_COMPACT_WIDTH + 16, Math.round(saved.x)),
+    );
+    const destY = Math.max(
+      workArea.y - 16,
+      Math.min(workArea.y + workArea.height - PET_COMPACT_HEIGHT + 16, Math.round(saved.y)),
+    );
+    return await flyPetWindowTo(destX, destY, 720);
+  });
+
+  // 2.16 主控面板与桌宠之间的番茄钟状态实时双向同步（控制面板开启番茄钟时若桌宠隐藏也自动唤出）
+  ipcMain.on("focus:sync-state", (event, payload) => {
+    const fromPet =
+      petWindow && !petWindow.isDestroyed() && event.sender === petWindow.webContents;
+    if (fromPet) {
+      sendToDashboard("focus:state-synced", payload);
+      return;
+    }
+    if (payload && payload.phase === "focus" && payload.running) {
+      if (!petWindow || petWindow.isDestroyed()) {
+        createPetWindow();
+      } else if (!petWindow.isVisible()) {
+        revealPetWindow();
+      }
+    }
+    sendToPet("focus:state-synced", payload);
   });
 
   // 2.2 靠边躲藏偷看状态下：鼠标悬浮探头平滑滑出，离开后延时重新缩回偷看
@@ -1365,9 +1640,12 @@ function setupIpcHandlers() {
     sendToDashboard("voice-call:turn-synced", payload);
   });
 
-  // 3. 从桌宠或面板唤起主控面板
-  ipcMain.on("app:open-dashboard", () => {
+  // 3. 从桌宠或面板唤起主控面板（支持可选目标页面跳转参数）
+  ipcMain.on("app:open-dashboard", (_event, target) => {
     openDashboardWindow();
+    if (target && typeof target === "object") {
+      sendToDashboard("dashboard:navigate", target);
+    }
   });
 
   // 4. 从面板唤起/隐藏桌宠
@@ -1376,8 +1654,8 @@ function setupIpcHandlers() {
       createPetWindow();
     } else if (petWindow.isVisible()) {
       petWindow.hide();
-    } else {
-      petWindow.show();
+    } else if (petWindowReady) {
+      revealPetWindow();
     }
     refreshTrayMenu();
   });
